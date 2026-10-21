@@ -1,0 +1,161 @@
+-- Preguiça Manager v2 — esquema inicial PostgreSQL/Supabase
+-- NÃO aplicar em produção sem revisão de segurança, RLS e testes.
+create extension if not exists pgcrypto;
+
+create type public.app_role as enum ('owner','manager','staff');
+create type public.attendance_kind as enum ('clock_in','clock_out','late','absence','medical_leave','early_departure','other');
+create type public.attendance_status as enum ('pending','validated','corrected','rejected');
+create type public.request_status as enum ('pending','approved','rejected');
+create type public.haccp_record_kind as enum ('temperature','cleaning','receiving','expiry_check','corrective_action');
+
+create table public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  display_name text not null,
+  role public.app_role not null default 'staff',
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table public.stock_items (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  unit text not null,
+  quantity numeric(12,3) not null default 0 check (quantity >= 0),
+  minimum_quantity numeric(12,3) not null default 0 check (minimum_quantity >= 0),
+  supplier_name text,
+  unit_cost_ex_vat numeric(12,4),
+  active boolean not null default true,
+  updated_by uuid references public.profiles(id),
+  updated_at timestamptz not null default now()
+);
+
+create table public.stock_movements (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references public.stock_items(id),
+  quantity_delta numeric(12,3) not null,
+  reason text not null,
+  supplier_name text,
+  lot_code text,
+  expiry_date date,
+  created_by uuid not null references public.profiles(id),
+  created_at timestamptz not null default now()
+);
+
+create table public.weekly_schedules (
+  id uuid primary key default gen_random_uuid(),
+  week_start date not null,
+  version integer not null default 1,
+  status text not null default 'draft' check (status in ('draft','published','superseded')),
+  published_by uuid references public.profiles(id),
+  published_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique(week_start, version)
+);
+
+create table public.shifts (
+  id uuid primary key default gen_random_uuid(),
+  schedule_id uuid not null references public.weekly_schedules(id) on delete cascade,
+  staff_id uuid not null references public.profiles(id),
+  shift_date date not null,
+  starts_at time not null,
+  ends_at time not null,
+  break_minutes integer not null default 0 check (break_minutes >= 0),
+  notes text
+);
+
+create table public.leave_requests (
+  id uuid primary key default gen_random_uuid(),
+  staff_id uuid not null references public.profiles(id),
+  leave_type text not null check (leave_type in ('holiday','personal','other')),
+  start_date date not null,
+  end_date date not null,
+  note text,
+  status public.request_status not null default 'pending',
+  decided_by uuid references public.profiles(id),
+  decided_at timestamptz,
+  decision_note text,
+  created_at timestamptz not null default now(),
+  check (end_date >= start_date)
+);
+
+create table public.attendance_records (
+  id uuid primary key default gen_random_uuid(),
+  staff_id uuid not null references public.profiles(id),
+  shift_id uuid references public.shifts(id),
+  kind public.attendance_kind not null,
+  occurred_at timestamptz not null,
+  note text,
+  status public.attendance_status not null default 'pending',
+  submitted_by uuid not null references public.profiles(id),
+  reviewed_by uuid references public.profiles(id),
+  reviewed_at timestamptz,
+  correction_reason text,
+  original_record jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table public.haccp_records (
+  id uuid primary key default gen_random_uuid(),
+  kind public.haccp_record_kind not null,
+  record_date date not null default current_date,
+  recorded_at timestamptz not null default now(),
+  staff_id uuid not null references public.profiles(id),
+  equipment_name text,
+  temperature_c numeric(5,2),
+  checklist_key text,
+  checklist_data jsonb not null default '{}'::jsonb,
+  result text,
+  corrective_action text,
+  submitted_at timestamptz not null default now()
+);
+
+create table public.haccp_requirements (
+  id uuid primary key default gen_random_uuid(),
+  kind public.haccp_record_kind not null,
+  requirement_key text not null,
+  label text not null,
+  required_by_time time,
+  days_of_week integer[] not null default array[1,2,3,4,5,6,7],
+  active boolean not null default true,
+  unique(kind, requirement_key)
+);
+
+create table public.product_recipes (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  category text,
+  sale_price_inc_vat numeric(12,2) not null check (sale_price_inc_vat >= 0),
+  ingredient_cost_ex_vat numeric(12,4) not null default 0 check (ingredient_cost_ex_vat >= 0),
+  ingredients jsonb not null default '[]'::jsonb,
+  method text,
+  allergens text[] not null default '{}',
+  active boolean not null default true,
+  updated_by uuid references public.profiles(id),
+  updated_at timestamptz not null default now()
+);
+
+create table public.audit_log (
+  id uuid primary key default gen_random_uuid(),
+  actor_id uuid references public.profiles(id),
+  action text not null,
+  table_name text not null,
+  record_id uuid,
+  reason text,
+  before_data jsonb,
+  after_data jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index on public.attendance_records(staff_id, occurred_at desc);
+create index on public.haccp_records(record_date, kind);
+create index on public.stock_items(active, name);
+create index on public.leave_requests(staff_id, start_date, end_date);
+create index on public.shifts(staff_id, shift_date);
+
+-- Nota crítica:
+-- Ativar RLS em todas as tabelas e criar políticas testadas antes de qualquer utilização real.
+-- A criação de contas e alteração de role devem ser feitas por função backend privilegiada,
+-- nunca por campos enviados diretamente pelo cliente.
+-- O alerta diário HACCP exige tarefa agendada no servidor, timezone Europe/Lisbon,
+-- calendário de dias de funcionamento e regras de prazo por tipo de registo.
+-- Para correções de assiduidade, gravar before/after e motivo em audit_log por trigger/função.
