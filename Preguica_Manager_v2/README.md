@@ -16,7 +16,7 @@ Abrir `web/index.html` num navegador atualizado. Não requer instalação. A dem
 
 O esquema de base de dados inicial não ativava RLS. As migrações aditivas em `database/migrations/` ativam as políticas por função, funções RPC de inventário, tarefas/histórico de higienização e vistas limitadas de férias. Não eliminam tabelas ou linhas existentes. Confirmar a conta `owner` antes de produção.
 
-A migração não cria utilizadores nem configura os PINs. Os PINs iniciais pedidos (gerência `4040`, colaboradora `2026`) não estão no código nem na base de dados. Só devem ser configurados depois de existir autenticação no servidor, proteção contra tentativas repetidas e um procedimento seguro de troca/recuperação. Um PIN de quatro dígitos não é suficiente como proteção isolada contra tentativas online.
+A migração não cria utilizadores nem configura os PINs iniciais solicitados. Esses PINs não estão no código, nesta documentação nem na base de dados. Só devem ser configurados depois de existir autenticação no servidor, proteção contra tentativas repetidas e um procedimento seguro de troca/recuperação. Um PIN de quatro dígitos não é suficiente como proteção isolada contra tentativas online.
 
 Para o modelo de funções, permissões e próximos passos de publicação, consultar `SECURITY_AND_DEPLOYMENT.md`.
 

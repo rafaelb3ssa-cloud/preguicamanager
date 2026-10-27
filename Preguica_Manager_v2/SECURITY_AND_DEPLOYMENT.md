@@ -29,7 +29,7 @@ RLS não autentica a interface estática. A aplicação precisa de autenticaçã
 
 ## Autenticação e PINs pedidos
 
-O protótipo não tem login. Os valores iniciais pedidos — gerência `4040` e colaboradora `2026` — não foram incorporados em HTML, SQL ou JavaScript. Ainda não há serviço de autenticação nem uma API server-side para os configurar. Antes de ativar esses PINs, é necessário implementar armazenamento de hash, limitação e bloqueio progressivo de tentativas, sessão segura, procedimento de troca e auditoria. A implementação não deve validar PIN apenas em JavaScript.
+O protótipo não tem login. Os PINs iniciais solicitados não foram incorporados em HTML, SQL, JavaScript ou documentação. Ainda não há serviço de autenticação nem uma API server-side para os configurar. Antes de ativar esses PINs, é necessário implementar armazenamento de hash, limitação e bloqueio progressivo de tentativas, sessão segura, procedimento de troca e auditoria. A implementação não deve validar PIN apenas em JavaScript.
 
 ## Higienização e manual
 
