@@ -17,7 +17,7 @@ O proprietário mantém acesso total através do perfil ativo `owner`. A migraç
 
 ## Migração SQL
 
-`database/migrations/20261027_01_roles_hygiene_stock.sql` é aditiva: ativa RLS no esquema inicial, configura políticas, adiciona tarefas e registos de higienização e saldos de férias inicialmente vazios, e cria RPCs para alterar quantidades e configurar artigos.
+As migrações aditivas em `database/migrations/` ativam RLS no esquema inicial, configuram políticas, adicionam tarefas e registos de higienização e saldos de férias inicialmente vazios, e criam RPCs para alterar quantidades e configurar artigos.
 
 - Stock: a colaboradora só recebe permissão de atualizar a coluna `quantity`; criação e edição de configuração passam por `configure_stock_item`, que exige `manager` ou `owner`. Atualizações de quantidade deixam um movimento de inventário.
 - Férias: leitura direta da tabela e escrita só para gerência. As vistas `staff_leave_calendar` e `staff_leave_balances` expõem à colaboradora apenas os dados de férias e saldo, sem notas pessoais de outros tipos de ausência. Os saldos não recebem valores fictícios.
@@ -48,6 +48,8 @@ Não há `vercel.json`, `.vercel/project.json` ou `package.json` na pasta `Pregu
 Foi criado o projeto Supabase `hmuzfvmpstejcnyiwbtx` na organização “Preguiça Manager”, em Frankfurt. A cotação devolvida no momento da criação foi 0 USD/mês. A base estava vazia e não recebeu artigos, utilizadores ou saldos inventados. O esquema inicial e as migrações de funções, higiene e férias estão aplicados. Confirmar custos atuais no painel Supabase, pois dependem do plano e utilização.
 
 O Vercel ainda não tem variáveis Supabase configuradas e a aplicação continua estática. Não há autenticação nem API de servidor ligados à base de dados, e os PINs iniciais continuam fora do código e da base de dados. Não usar a demonstração como sistema de registo oficial. As chaves privilegiadas devem ficar em variáveis server-side; o browser pode receber apenas configuração publicável depois da implementação.
+
+As 76 fichas vindas do ZIP aparecem na demonstração como dados de referência. Custos e margens não foram confirmados; alterações guardadas no navegador não entram na base de dados.
 
 ## Verificação necessária em staging
 

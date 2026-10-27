@@ -6,13 +6,15 @@ Esta pasta contém uma interface HTML estática de demonstração e um esquema P
 
 O protótipo inclui painel, stock/compras, horários, férias, assiduidade, HACCP/higiene, fichas técnicas e alertas. Estes módulos foram mantidos. Os artigos e exemplos presentes no HTML não são uma base de dados de produção e não devem ser tratados como inventário ou registos oficiais.
 
+A página `web/index.html` agora inclui as 76 fichas do ZIP, com pesquisa, filtro por categoria, edição e exportação CSV. Os custos são referências estimadas e devem ser validados com faturas e receitas reais; alterações continuam apenas neste navegador.
+
 ## Abrir a demonstração
 
 Abrir `web/index.html` num navegador atualizado. Não requer instalação. A demonstração não autentica utilizadores nem sincroniza dados entre dispositivos.
 
 ## Segurança e migração
 
-O esquema de base de dados inicial não ativava RLS. A migração aditiva em `database/migrations/20261027_01_roles_hygiene_stock.sql` introduz as políticas por função, funções RPC de inventário e as tabelas de tarefas/histórico de higienização. Não elimina tabelas ou linhas existentes. A aplicação desta migração pode tornar as tabelas inacessíveis a clientes até que perfis ativos e funções sejam associados corretamente; validar primeiro em staging e confirmar a conta `owner` antes de produção.
+O esquema de base de dados inicial não ativava RLS. As migrações aditivas em `database/migrations/` ativam as políticas por função, funções RPC de inventário, tarefas/histórico de higienização e vistas limitadas de férias. Não eliminam tabelas ou linhas existentes. Confirmar a conta `owner` antes de produção.
 
 A migração não cria utilizadores nem configura os PINs. Os PINs iniciais pedidos (gerência `4040`, colaboradora `2026`) não estão no código nem na base de dados. Só devem ser configurados depois de existir autenticação no servidor, proteção contra tentativas repetidas e um procedimento seguro de troca/recuperação. Um PIN de quatro dígitos não é suficiente como proteção isolada contra tentativas online.
 
