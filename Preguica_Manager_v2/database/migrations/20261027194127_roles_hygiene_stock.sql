@@ -5,7 +5,7 @@ begin;
 create or replace function public.current_app_role()
 returns public.app_role
 language sql stable security definer
-set search_path = public, pg_temp
+set search_path = ''
 as $$
   select p.role from public.profiles p
   where p.id = auth.uid() and p.active = true
@@ -14,7 +14,7 @@ $$;
 create or replace function public.is_manager_or_owner()
 returns boolean
 language sql stable security definer
-set search_path = public, pg_temp
+set search_path = ''
 as $$ select coalesce(public.current_app_role() in ('owner', 'manager'), false) $$;
 
 revoke all on function public.current_app_role() from public, anon;
@@ -101,7 +101,7 @@ on conflict (frequency, name) do nothing;
 create or replace function public.update_stock_quantity(p_item_id uuid, p_quantity numeric)
 returns void
 language plpgsql security definer
-set search_path = public, pg_temp
+set search_path = ''
 as $$
 begin
   if coalesce(public.current_app_role() not in ('owner', 'manager', 'staff'), true) then
@@ -127,7 +127,7 @@ create or replace function public.configure_stock_item(
 )
 returns uuid
 language plpgsql security definer
-set search_path = public, pg_temp
+set search_path = ''
 as $$
 declare v_id uuid;
 begin
@@ -156,7 +156,7 @@ $$;
 create or replace function public.add_monthly_cleaning_task(p_name text)
 returns uuid
 language plpgsql security definer
-set search_path = public, pg_temp
+set search_path = ''
 as $$
 declare v_id uuid;
 begin

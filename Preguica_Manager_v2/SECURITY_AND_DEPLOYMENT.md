@@ -45,7 +45,9 @@ O registo persistente, responsável, data/hora, observações e produto usado es
 
 Não há `vercel.json`, `.vercel/project.json` ou `package.json` na pasta `Preguica_Manager_v2`. O README existente aponta para `web/index.html`, mas a raiz atualmente configurada no painel Vercel não é acessível neste repositório. Confirmar a raiz do projeto e a configuração de build diretamente no painel; não inferir que o protótipo está protegido por estar alojado na Vercel.
 
-Não foi encontrada base de dados de produção no projeto. Nenhum serviço foi criado e nenhum recurso externo foi alterado. Supabase é uma opção a avaliar, sujeita a autorização do proprietário quanto à criação do projeto, região, plano/custos e acesso às credenciais. Se aprovado, usar as variáveis de ambiente do servidor para segredos. O browser pode receber apenas configuração pública e tokens de sessão; a autorização continua a ser validada pela base de dados/API.
+Foi criado o projeto Supabase `hmuzfvmpstejcnyiwbtx` na organização “Preguiça Manager”, em Frankfurt. A cotação devolvida no momento da criação foi 0 USD/mês. A base estava vazia e não recebeu artigos, utilizadores ou saldos inventados. O esquema inicial e as migrações de funções, higiene e férias estão aplicados. Confirmar custos atuais no painel Supabase, pois dependem do plano e utilização.
+
+O Vercel ainda não tem variáveis Supabase configuradas e a aplicação continua estática. Não há autenticação nem API de servidor ligados à base de dados, e os PINs iniciais continuam fora do código e da base de dados. Não usar a demonstração como sistema de registo oficial. As chaves privilegiadas devem ficar em variáveis server-side; o browser pode receber apenas configuração publicável depois da implementação.
 
 ## Verificação necessária em staging
 
@@ -58,4 +60,4 @@ Antes da aplicação em produção, criar utilizadores de teste ligados a perfis
 5. Staff consegue inserir histórico de higiene apenas em seu nome; não consegue editar/apagar o histórico nem adicionar tarefa mensal.
 6. Manager e owner conseguem executar operações de gestão permitidas. A conta owner mantém leitura/escrita sobre os dados anteriores.
 
-Não foi possível executar testes SQL nesta alteração porque não existe uma instância PostgreSQL/Supabase ou configuração de produção ligada ao workspace. A migração ainda precisa de ser aplicada e testada numa instância staging antes de ser considerada pronta.
+Foram executados testes transacionais com perfis temporários de gerente e colaboradora. Verificaram leitura limitada do mapa/saldos, bloqueio de escrita de férias para staff, bloqueio de configuração de stock e tarefas mensais para staff, atualização da quantidade real, auditoria de movimentos, registos próprios de HACCP/higiene e operações de gestão. Os fixtures foram revertidos. O advisory Supabase já não reporta vistas inseguras nem funções de trigger executáveis por `anon`; permanecem avisos sobre funções privilegiadas autenticadas, que verificam a função internamente. A interface e as chamadas reais à API continuam por implementar e testar antes de produção.
