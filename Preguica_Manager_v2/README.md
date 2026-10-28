@@ -4,11 +4,11 @@
 
 A branch `codex/preguica-manager-v2-permissions` está ligada ao projeto Vercel `preguicamanager-web`. O deploy desta branch é uma pré-visualização; a produção não foi promovida. O HTML servido pelo último preview usa `web/index.html` e recebeu HTTP 200.
 
-A autenticação por PIN e as operações sensíveis passam pelo Edge Function `preguica-auth`, com sessões opacas e autorização no servidor. PINs são armazenados como hashes; a chave service-role fica apenas no ambiente da Edge Function. Gerência pode administrar utilizadores; colaboradoras têm acesso ao HACCP, inventário e compras, mapa anual de férias, horário publicado e aos próprios registos de assiduidade. Os módulos de horários, assiduidade, higienização das instalações, fornecedores e stock usam operações persistentes na base de dados. Alertas automáticos continuam demonstrativos.
+A autenticação por PIN e as operações sensíveis passam pelo Edge Function `preguica-auth`, com sessões opacas e autorização no servidor. PINs são armazenados como hashes; a chave service-role fica apenas no ambiente da Edge Function. O ecrã de login apresenta apenas Gerência ou Colaborador. A escolha determina o perfil no servidor; o PIN nunca é validado só no browser. Para já, o login Colaborador usa o perfil Alice existente. Na aplicação, esse perfil vê apenas HACCP e os seus submenus, fichas técnicas em consulta e stock/compras. Só a Gerência vê os restantes módulos e pode editar fichas, configurar artigos ou gerir horários, férias e equipa. Os módulos de horários, assiduidade, higienização das instalações, fornecedores e stock usam operações persistentes na base de dados. Alertas automáticos continuam demonstrativos.
 
 ## Equipa e horários
 
-Alice tem base semanal de 40 horas; Inês Machado, 40 horas; Inês Sequeira, 25 horas. Inês Machado e Inês Sequeira já estão na equipa, mas ainda não têm PIN definido e por isso não aparecem no ecrã de login. A Gerência pode atribuir os PINs no módulo Equipa.
+Alice tem base semanal de 40 horas; Inês Machado, 40 horas; Inês Sequeira, 25 horas. Inês Machado e Inês Sequeira já estão na equipa, mas ainda não têm PIN próprio definido. O login Colaborador atual está associado ao perfil Alice até serem configuradas contas individuais.
 
 A grelha semanal permite inserir um ou mais intervalos por dia, guardar rascunhos, publicar para consulta da equipa e criar uma revisão de um horário publicado. Horas reais de turnos ainda devem ser preenchidas pela Gerência; não foram inventados horários.
 

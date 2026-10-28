@@ -41,9 +41,12 @@ Deno.serve(async (req: Request) => {
   const action = String(body.action || '');
 
   if (action === 'list-users') {
-    const { data, error } = await db.from('profiles').select('id,display_name').eq('active', true).not('pin_hash','is',null).order('display_name');
+    const { data, error } = await db.from('profiles').select('id,display_name,role').eq('active', true).not('pin_hash','is',null).order('display_name');
     if (error) return fail('Não foi possível carregar os utilizadores.', 500);
-    return reply({ users: data || [] });
+    const profiles=data||[];
+    const manager=profiles.find(p=>p.role==='owner')||profiles.find(p=>p.role==='manager');
+    const collaborator=profiles.find(p=>p.role==='staff');
+    return reply({ users:[...(manager?[{...manager,login_label:'Gerência'}]:[]),...(collaborator?[{...collaborator,login_label:'Colaborador'}]:[])] });
   }
 
   if (action === 'login') {
@@ -76,6 +79,8 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
+  const staffActions=new Set(['stock:list','stock:quantity','suppliers:list','haccp:list','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','recipes:list']);
+  if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if (action === 'stock:list') {
     const { data, error } = await db.from('stock_items').select('id,name,category,unit,quantity,minimum_quantity,supplier_name,unit_cost_ex_vat,active').eq('active', true).order('category').order('name');
@@ -294,7 +299,6 @@ Deno.serve(async (req: Request) => {
   }
 
   if (action === 'recipes:list') {
-    if (!canManage(actor)) return fail('Sem permissões para consultar fichas técnicas.', 403);
     const { data, error } = await db.from('product_recipes').select('id,name,category,sale_price_inc_vat,ingredient_cost_ex_vat,ingredients,method,active').eq('active', true).order('name');
     if (error) return fail('Não foi possível carregar as fichas técnicas.', 500);
     const recipes = (data || []).map((r) => ({
