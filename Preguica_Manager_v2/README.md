@@ -2,7 +2,7 @@
 
 ## Estado atual
 
-A branch liga autenticação por PIN, perfis, stock/compras, férias, HACCP/higiene e fichas técnicas ao Supabase através do Edge Function. PINs usam hashes bcrypt e sessões opacas expiram após 12 horas. Existem os perfis iniciais Gerência e Alice. Horários, assiduidade e alertas ainda estão em demonstração; a aplicação não está pronta para produção.
+A branch liga autenticação por PIN, perfis, stock/compras, férias, HACCP/higiene e fichas técnicas ao Supabase através do Edge Function. PINs usam hashes bcrypt e sessões opacas expiram após 12 horas. Existem os perfis iniciais Gerência e Alice. Horários, assiduidade e alertas ainda estão em demonstração; a aplicação não está pronta para produção. O mapa de férias é coletivo e lista datas de encerramento, distinguindo feriados de férias coletivas.
 
 Os módulos originais foram mantidos. Os dados de painel, horários, assiduidade e alertas continuam ilustrativos. O inventário e saldos de férias no novo projeto não foram inventados: a gerência deve confirmar e inserir os valores reais.
 
@@ -26,7 +26,7 @@ Não foi encontrada configuração Vercel versionada (`vercel.json`, `.vercel/pr
 
 ## HACCP e stock
 
-O menu HACCP inclui um modelo de referência para café/bar (bebidas com e sem álcool e tostas) e separadores de Manual, Temperaturas, Higienização e Checklists. O manual oficial aprovado pelo estabelecimento continua a prevalecer e a aplicação não inventa limites. Temperaturas usam uma grelha mensal com equipamento, manhã/tarde e rubrica; higienização usa uma grelha por tarefa/dia, mais histórico de produto e observações. As 12 tarefas-base ficam na base de dados. A base tem atualmente zero registos de temperaturas e zero conclusões de limpeza; não foram importados valores ilegíveis da fotografia.
+O menu HACCP inclui um modelo de referência para café/bar (bebidas com e sem álcool e tostas) e separadores de Manual, Temperaturas, Higienização e Checklists. O manual oficial aprovado pelo estabelecimento continua a prevalecer e a aplicação não inventa limites. Temperaturas usam uma grelha mensal com equipamento, manhã/tarde e rubrica; higienização usa uma grelha por tarefa/dia, mais histórico de produto e observações. As 12 tarefas-base ficam na base de dados. A base tem atualmente zero registos de temperaturas e zero conclusões de limpeza; não foram importados valores ilegíveis da fotografia. O mapa anual tem as cinco datas de dezembro de 2026 indicadas pela Gerência: 1, 8 e 25 como feriados; 24 e 31 como férias coletivas. O mapa pode ser exportado como ficheiro `.ics` para importar na agenda.
 
 A quantidade sugerida a comprar deve ser calculada como `max(0, mínimo configurado - quantidade atual)`. O artigo guarda unidade, fornecedor e custo quando estes dados existem.
 
@@ -34,6 +34,6 @@ A quantidade sugerida a comprar deve ser calculada como `max(0, mínimo configur
 
 1. O projeto Supabase `hmuzfvmpstejcnyiwbtx` foi criado na região `eu-central-1` (Frankfurt), na organização “Preguiça Manager”; a cotação consultada na criação foi 0 USD/mês. O projeto estava vazio e as migrações iniciais foram aplicadas. Confirmar os custos atuais no painel Supabase porque podem mudar com o uso/plano.
 2. Ligar horários, assiduidade e alertas às tabelas através de operações server-side com autorização por função.
-3. Não há artigos reais nem saldos confirmados no novo projeto. Importar dados apenas após validação do proprietário; nenhum dado anterior foi eliminado ou copiado.
+3. Não há artigos reais nem saldos laborais confirmados no novo projeto. As cinco datas de encerramento de dezembro de 2026 foram inseridas no mapa; os pedidos/saldos antigos continuam preservados nas tabelas legadas. Nenhum dado anterior foi eliminado ou copiado.
 4. Completar testes de cada módulo com Gerência e Alice e confirmar que tentativas não autorizadas são recusadas pelo servidor/base de dados.
 5. Confirmar backups/restauro, raiz/build Vercel e os dados reais do inventário antes de publicar em produção.

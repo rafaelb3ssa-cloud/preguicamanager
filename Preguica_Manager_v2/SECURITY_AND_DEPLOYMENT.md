@@ -20,7 +20,7 @@ O perfil ativo `owner` é a conta proprietária. A migração de PIN mantém as 
 As migrações aditivas em `database/migrations/` ativam RLS no esquema inicial, configuram políticas, adicionam tarefas e registos de higienização e saldos de férias inicialmente vazios, e criam RPCs para alterar quantidades e configurar artigos.
 
 - Stock: a colaboradora só recebe permissão de atualizar a coluna `quantity`; criação e edição de configuração passam por `configure_stock_item`, que exige `manager` ou `owner`. Atualizações de quantidade deixam um movimento de inventário.
-- Férias: leitura direta da tabela e escrita só para gerência. As vistas `staff_leave_calendar` e `staff_leave_balances` expõem à colaboradora apenas os dados de férias e saldo, sem notas pessoais de outros tipos de ausência. Os saldos não recebem valores fictícios.
+- Férias/encerramentos: o mapa `collective_closure_days` permite leitura por perfis ativos e escrita só a `manager`/`owner` via API e RLS. A interface não aceita pedidos individuais; feriados aparecem como encerrado sem contar como férias, e dias classificados pela Gerência como férias coletivas contam como férias. As tabelas legadas `leave_requests` e `leave_balances` ficam preservadas.
 - Horários, assiduidade e fichas: as políticas só autorizam `manager`/`owner`.
 - HACCP: utilizadores ativos autenticados podem consultar e submeter registos; colaboradoras só podem submeter com o seu próprio `staff_id`. Os registos existentes não são reescritos.
 - Higienização: tarefas ativas são consultáveis; registos são append-only para a colaboradora. `add_monthly_cleaning_task` exige gerência. A lista inicial é inserida com `on conflict do nothing`.
@@ -41,13 +41,17 @@ O menu HACCP inclui um modelo geral para café/bar com bebidas alcoólicas e nã
 
 O registo persistente, responsável, data/hora, observações e produto usado são escritos em `cleaning_records` pela API autenticada. A coluna JSON existente `checklist_data` guarda manhã/tarde nos registos de temperatura, sem migração adicional.
 
+## Mapa anual de encerramentos
+
+O mapa anual semeia 1, 8, 24, 25 e 31 de dezembro de 2026 conforme indicação da Gerência. Dias 1, 8 e 25 são feriados obrigatórios no Código do Trabalho; 24 e 31 foram classificados como férias coletivas. A aplicação exporta os encerramentos do ano selecionado como `.ics` para importação na agenda.
+
 ## Vercel e passos de produção
 
 Não há `vercel.json`, `.vercel/project.json` ou `package.json` na pasta `Preguica_Manager_v2`. O README existente aponta para `web/index.html`, mas a raiz atualmente configurada no painel Vercel não é acessível neste repositório. Confirmar a raiz do projeto e a configuração de build diretamente no painel; não inferir que o protótipo está protegido por estar alojado na Vercel.
 
 Foi criado o projeto Supabase `hmuzfvmpstejcnyiwbtx` na organização “Preguiça Manager”, em Frankfurt. A cotação devolvida no momento da criação foi 0 USD/mês. A base não recebeu artigos, utilizadores laborais adicionais ou saldos inventados. Estão aplicados o esquema e as migrações de funções, higiene, férias e PIN. Os únicos perfis são Gerência e Alice. Confirmar custos atuais no painel Supabase, pois dependem do plano e utilização.
 
-A branch liga PIN/utilizadores, fichas, stock, férias e HACCP/higiene a operações server-side com controlo por função. Horários, assiduidade e alertas continuam demonstrativos. O aviso de pré-produção permanece na aplicação. Não usar os módulos ilustrativos como registos oficiais nem promover a branch até ligar e testar os módulos ainda pendentes. O browser contém apenas a chave publicável.
+A branch liga PIN/utilizadores, fichas, stock, mapa anual de encerramentos e HACCP/higiene a operações server-side com controlo por função. Horários, assiduidade e alertas continuam demonstrativos. O aviso de pré-produção permanece na aplicação. Não usar os módulos ilustrativos como registos oficiais nem promover a branch até ligar e testar os módulos ainda pendentes. O browser contém apenas a chave publicável.
 
 As 76 fichas vindas do ZIP estão na tabela `product_recipes` e são servidas apenas a Gerência. Custos e margens continuam estimativas não confirmadas.
 
@@ -57,7 +61,7 @@ Antes da aplicação em produção, criar utilizadores de teste ligados a perfis
 
 1. Staff consegue ler e criar registos HACCP próprios; não consegue forjar `staff_id` nem editar/apagar histórico.
 2. Staff consegue ler inventário e compras, atualizar `quantity`, e recebe erro ao tentar alterar mínimo, fornecedor, preço ou criar artigo.
-3. Staff consegue consultar as vistas de férias, mas não selecionar/escrever diretamente em `leave_requests` ou editar saldos.
+3. Staff consegue consultar o mapa anual de encerramentos, mas recebe 403 ao tentar adicionar, alterar ou remover datas. As operações de férias individuais e saldos ficam fora da interface.
 4. Staff não consegue ler horários, assiduidade, fichas técnicas ou auditoria.
 5. Staff consegue inserir histórico de higiene e leituras de temperatura apenas em seu nome; não consegue editar/apagar o histórico nem adicionar tarefa mensal.
 6. Manager e owner conseguem executar operações de gestão permitidas. A conta owner mantém leitura/escrita sobre os dados anteriores.

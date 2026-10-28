@@ -149,6 +149,26 @@ Deno.serve(async (req: Request) => {
     const { error } = await db.from('cleaning_tasks').insert({ name, frequency: 'monthly', created_by: actor.id, active: true });
     return error ? fail('Não foi possível adicionar a tarefa mensal.', 400) : reply({ ok: true });
   }
+  if (action === 'closures:list') {
+    const year = Number(body.year);
+    if (!Number.isInteger(year) || year < 2000 || year > 2200) return fail('Indica um ano válido.');
+    const { data, error } = await db.from('collective_closure_days').select('closed_date,closure_type,note').gte('closed_date', `${year}-01-01`).lt('closed_date', `${year + 1}-01-01`).order('closed_date');
+    return error ? fail('Não foi possível carregar o mapa anual.', 500) : reply({ days: data || [] });
+  }
+  if (action === 'closures:save-day') {
+    if (!canManage(actor)) return fail('Só a gerência pode alterar o mapa de encerramentos.', 403);
+    const date = String(body.date || ''), type = String(body.type || ''), note = String(body.note || '').trim();
+    if (!validDate(date) || !['public_holiday', 'collective_vacation'].includes(type) || note.length > 300) return fail('Confirma a data, classificação e nota do encerramento.');
+    const { error } = await db.from('collective_closure_days').upsert({ closed_date: date, closure_type: type, note: note || null, created_by: actor.id, updated_at: new Date().toISOString() }, { onConflict: 'closed_date' });
+    return error ? fail('Não foi possível guardar o encerramento.', 400) : reply({ ok: true });
+  }
+  if (action === 'closures:remove-day') {
+    if (!canManage(actor)) return fail('Só a gerência pode alterar o mapa de encerramentos.', 403);
+    const date = String(body.date || '');
+    if (!validDate(date)) return fail('Indica uma data válida.');
+    const { error } = await db.from('collective_closure_days').delete().eq('closed_date', date);
+    return error ? fail('Não foi possível remover o encerramento.', 400) : reply({ ok: true });
+  }
   if (action === 'holidays:list') {
     const [leave, balances, profiles] = await Promise.all([
       db.from('leave_requests').select('id,staff_id,start_date,end_date,status,cancelled_at').eq('leave_type', 'holiday').order('start_date'),
