@@ -2,9 +2,9 @@
 
 ## Estado atual
 
-Esta branch já tem entrada por utilizador/PIN e gestão de utilizadores ligadas ao Supabase. A autenticação é validada no Edge Function, os PINs são guardados como hashes bcrypt e as sessões expiram ao fim de 12 horas. Estão criadas as contas iniciais Gerência e Alice. Os restantes módulos continuam em demonstração e ainda não sincronizam os dados com a base de dados; a aplicação não está pronta para produção.
+A branch liga autenticação por PIN, perfis, stock/compras, férias, HACCP/higiene e fichas técnicas ao Supabase através do Edge Function. PINs usam hashes bcrypt e sessões opacas expiram após 12 horas. Existem os perfis iniciais Gerência e Alice. Horários, assiduidade e alertas ainda estão em demonstração; a aplicação não está pronta para produção.
 
-O protótipo inclui painel, stock/compras, horários, férias, assiduidade, HACCP/higiene, fichas técnicas e alertas. Estes módulos foram mantidos. Os artigos e exemplos presentes no HTML não são uma base de dados de produção e não devem ser tratados como inventário ou registos oficiais.
+Os módulos originais foram mantidos. Os dados de painel, horários, assiduidade e alertas continuam ilustrativos. O inventário e saldos de férias no novo projeto não foram inventados: a gerência deve confirmar e inserir os valores reais.
 
 As 76 fichas de referência do ZIP ficam na tabela `product_recipes` e só a Gerência as carrega pela API. Os custos são estimativas e devem ser validados com faturas e receitas reais; alterações feitas pela Gerência passam a ser guardadas na base de dados.
 
@@ -26,14 +26,14 @@ Não foi encontrada configuração Vercel versionada (`vercel.json`, `.vercel/pr
 
 ## HACCP e stock
 
-O manual oficial aprovado pelo estabelecimento continua a ser a referência. A demonstração não inventa limites de temperatura. As tarefas de higienização semeadas pela migração são diárias (bancadas/superfícies, chão, instrumentos/utensílios), semanais (vidros, pó, teias de aranha, frigoríficos) e mensais (paredes, teto, candeeiros, congelador, armazém). O histórico só fica disponível depois de uma API autenticada usar as tabelas novas.
+O menu HACCP inclui um modelo de referência para café/bar (bebidas com e sem álcool e tostas) e separadores de Manual, Temperaturas, Higienização e Checklists. O manual oficial aprovado pelo estabelecimento continua a prevalecer e a aplicação não inventa limites. Temperaturas usam uma grelha mensal com equipamento, manhã/tarde e rubrica; higienização usa uma grelha por tarefa/dia, mais histórico de produto e observações. As 12 tarefas-base ficam na base de dados. A base tem atualmente zero registos de temperaturas e zero conclusões de limpeza; não foram importados valores ilegíveis da fotografia.
 
 A quantidade sugerida a comprar deve ser calculada como `max(0, mínimo configurado - quantidade atual)`. O artigo guarda unidade, fornecedor e custo quando estes dados existem.
 
 ## Antes de produção
 
 1. O projeto Supabase `hmuzfvmpstejcnyiwbtx` foi criado na região `eu-central-1` (Frankfurt), na organização “Preguiça Manager”; a cotação consultada na criação foi 0 USD/mês. O projeto estava vazio e as migrações iniciais foram aplicadas. Confirmar os custos atuais no painel Supabase porque podem mudar com o uso/plano.
-2. Ligar o stock, horários, férias, assiduidade, HACCP/higiene, fichas técnicas e alertas às tabelas através de operações server-side com autorização por função.
+2. Ligar horários, assiduidade e alertas às tabelas através de operações server-side com autorização por função.
 3. Não há artigos reais nem saldos confirmados no novo projeto. Importar dados apenas após validação do proprietário; nenhum dado anterior foi eliminado ou copiado.
-4. Testar cada módulo com Gerência e Alice e confirmar que tentativas não autorizadas são recusadas pelo servidor/base de dados.
+4. Completar testes de cada módulo com Gerência e Alice e confirmar que tentativas não autorizadas são recusadas pelo servidor/base de dados.
 5. Confirmar backups/restauro, raiz/build Vercel e os dados reais do inventário antes de publicar em produção.

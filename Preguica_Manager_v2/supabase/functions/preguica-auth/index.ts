@@ -31,6 +31,7 @@ async function currentProfile(req: Request): Promise<Profile | null> {
   return data as Profile | null;
 }
 const canManage = (profile: Profile) => profile.role === 'owner' || profile.role === 'manager';
+const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: cors });
@@ -75,6 +76,111 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
+
+  if (action === 'stock:list') {
+    const { data, error } = await db.from('stock_items').select('id,name,unit,quantity,minimum_quantity,supplier_name,unit_cost_ex_vat,active').eq('active', true).order('name');
+    return error ? fail('Não foi possível carregar o inventário.', 500) : reply({ items: data || [] });
+  }
+  if (action === 'stock:quantity') {
+    const quantity = Number(body.quantity), id = String(body.itemId || '');
+    if (!/^[0-9a-f-]{36}$/i.test(id) || !Number.isFinite(quantity) || quantity < 0) return fail('Quantidade inválida.');
+    const { error } = await db.from('stock_items').update({ quantity, updated_by: actor.id, updated_at: new Date().toISOString() }).eq('id', id).eq('active', true);
+    return error ? fail('Não foi possível atualizar a quantidade.', 400) : reply({ ok: true });
+  }
+  if (action === 'stock:configure') {
+    if (!canManage(actor)) return fail('Só a gerência pode criar ou configurar artigos.', 403);
+    const item = body.item && typeof body.item === 'object' ? body.item as Record<string, unknown> : {};
+    const name = String(item.name || '').trim(), unit = String(item.unit || '').trim();
+    const quantity = Number(item.quantity), minimum = Number(item.minimum_quantity), cost = item.unit_cost_ex_vat == null ? null : Number(item.unit_cost_ex_vat);
+    if (!name || !unit || name.length > 120 || !Number.isFinite(quantity) || quantity < 0 || !Number.isFinite(minimum) || minimum < 0 || (cost !== null && (!Number.isFinite(cost) || cost < 0))) return fail('Confirma os dados do artigo.');
+    const record = { name, unit, quantity, minimum_quantity: minimum, supplier_name: String(item.supplier_name || '').slice(0, 160) || null, unit_cost_ex_vat: cost, updated_by: actor.id, updated_at: new Date().toISOString(), active: true };
+    const result = item.id ? await db.from('stock_items').update(record).eq('id', item.id).select('id').single() : await db.from('stock_items').insert(record).select('id').single();
+    return result.error ? fail('Não foi possível guardar o artigo.', 400) : reply({ id: result.data.id });
+  }
+
+  if (action === 'haccp:list') {
+    const temperatureMonth = String(body.temperatureMonth || new Date().toISOString().slice(0, 7));
+    const cleaningMonth = String(body.cleaningMonth || temperatureMonth);
+    const monthRange = (value: string) => {
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return null;
+      const start = `${value}-01`;
+      const [year, month] = value.split('-').map(Number);
+      const end = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+      return { start, end };
+    };
+    const temperatureRange = monthRange(temperatureMonth), cleaningRange = monthRange(cleaningMonth);
+    if (!temperatureRange || !cleaningRange) return fail('Indica um mês válido.');
+    const [records, tasks, cleaning] = await Promise.all([
+      db.from('haccp_records').select('id,kind,record_date,recorded_at,staff_id,equipment_name,temperature_c,checklist_key,checklist_data,result,corrective_action').gte('record_date', temperatureRange.start).lt('record_date', temperatureRange.end).order('recorded_at', { ascending: false }),
+      db.from('cleaning_tasks').select('id,name,frequency,active').eq('active', true).order('frequency').order('name'),
+      db.from('cleaning_records').select('id,task_id,task_name,frequency,completed_at,completed_by,observations,product_used').gte('completed_at', `${cleaningRange.start}T00:00:00Z`).lt('completed_at', `${cleaningRange.end}T00:00:00Z`).order('completed_at', { ascending: false }),
+    ]);
+    if (records.error || tasks.error || cleaning.error) return fail('Não foi possível carregar os registos HACCP.', 500);
+    const { data: profiles, error: profileError } = await db.from('profiles').select('id,display_name').eq('active', true);
+    if (profileError) return fail('Não foi possível carregar responsáveis.', 500);
+    return reply({ records: records.data || [], tasks: tasks.data || [], cleaning: cleaning.data || [], profiles: profiles || [] });
+  }
+  if (action === 'haccp:temperature' || action === 'haccp:checklist') {
+    const recordDate = String(body.date || new Date().toISOString().slice(0, 10));
+    if (!validDate(recordDate)) return fail('Indica uma data válida.');
+    if (recordDate > new Date().toISOString().slice(0, 10)) return fail('Não é possível registar uma data futura.');
+    const base = { staff_id: actor.id, recorded_at: new Date().toISOString(), record_date: recordDate };
+    const record = action === 'haccp:temperature'
+      ? { ...base, kind: 'temperature', equipment_name: String(body.equipment || '').trim().slice(0, 120), temperature_c: Number(body.temperature), checklist_data: { period: body.period === 'Tarde' ? 'Tarde' : 'Manhã' }, result: 'Registada; avaliar pelo plano HACCP aprovado', corrective_action: String(body.observations || '').slice(0, 2000) }
+      : { ...base, kind: 'cleaning', checklist_key: String(body.checklist || '').slice(0, 80), checklist_data: body.checklistData && typeof body.checklistData === 'object' ? body.checklistData : {}, result: 'Registada', corrective_action: String(body.observations || '').slice(0, 2000) };
+    if (action === 'haccp:temperature' && (!record.equipment_name || !Number.isFinite(record.temperature_c))) return fail('Indica equipamento e temperatura.');
+    const { error } = await db.from('haccp_records').insert(record);
+    return error ? fail('Não foi possível guardar o registo HACCP.', 400) : reply({ ok: true });
+  }
+  if (action === 'cleaning:record') {
+    const id = String(body.taskId || '');
+    const completedDate = String(body.completedDate || new Date().toISOString().slice(0, 10));
+    if (!validDate(completedDate) || completedDate > new Date().toISOString().slice(0, 10)) return fail('Indica uma data válida para a conclusão.');
+    const { data: task, error: taskError } = await db.from('cleaning_tasks').select('id,name,frequency').eq('id', id).eq('active', true).maybeSingle();
+    if (taskError || !task) return fail('Tarefa não encontrada.', 404);
+    const completedAt = `${completedDate}T${new Date().toISOString().slice(11, 23)}Z`;
+    const { error } = await db.from('cleaning_records').insert({ task_id: task.id, task_name: task.name, frequency: task.frequency, completed_by: actor.id, completed_at: completedAt, observations: String(body.observations || '').slice(0, 2000), product_used: String(body.product || '').slice(0, 200) });
+    return error ? fail('Não foi possível guardar a tarefa.', 400) : reply({ ok: true });
+  }
+  if (action === 'cleaning:add-monthly-task') {
+    if (!canManage(actor)) return fail('Só a gerência pode adicionar tarefas.', 403);
+    const name = String(body.name || '').trim();
+    if (!name || name.length > 120) return fail('Indica um nome de tarefa.');
+    const { error } = await db.from('cleaning_tasks').insert({ name, frequency: 'monthly', created_by: actor.id, active: true });
+    return error ? fail('Não foi possível adicionar a tarefa mensal.', 400) : reply({ ok: true });
+  }
+  if (action === 'holidays:list') {
+    const [leave, balances, profiles] = await Promise.all([
+      db.from('leave_requests').select('id,staff_id,start_date,end_date,status,cancelled_at').eq('leave_type', 'holiday').order('start_date'),
+      db.from('leave_balances').select('staff_id,reference_year,entitled_days,used_days'),
+      db.from('profiles').select('id,display_name,role').eq('active', true),
+    ]);
+    if (leave.error || balances.error || profiles.error) return fail('Não foi possível carregar o mapa de férias.', 500);
+    const names = new Map((profiles.data || []).map(p => [p.id, p.display_name]));
+    return reply({ entries: (leave.data || []).map(x => ({ ...x, display_name: names.get(x.staff_id) || '—' })), balances: (balances.data || []).map(x => ({ ...x, display_name: names.get(x.staff_id) || '—', remaining_days: Number(x.entitled_days) - Number(x.used_days) })), staff: (profiles.data || []).filter(p => p.role === 'staff') });
+  }
+  if (action === 'holidays:collective') {
+    if (!canManage(actor)) return fail('Só a gerência pode criar períodos de férias.', 403);
+    const start = String(body.start || ''), end = String(body.end || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || end < start) return fail('Confirma as datas do período.');
+    const { data: staff, error: staffError } = await db.from('profiles').select('id').eq('active', true).eq('role', 'staff');
+    if (staffError) return fail('Não foi possível carregar a equipa.', 500);
+    if (!staff?.length) return fail('Não há colaboradoras ativas para registar.');
+    const { error } = await db.from('leave_requests').insert(staff.map(p => ({ staff_id: p.id, leave_type: 'holiday', start_date: start, end_date: end, note: String(body.note || '').slice(0, 1000) || null, status: 'approved', decided_by: actor.id, decided_at: new Date().toISOString() })));
+    return error ? fail('Não foi possível registar o período.', 400) : reply({ ok: true, affected: staff.length });
+  }
+  if (action === 'holidays:cancel') {
+    if (!canManage(actor)) return fail('Só a gerência pode cancelar períodos.', 403);
+    const { error } = await db.from('leave_requests').update({ cancelled_at: new Date().toISOString(), cancelled_by: actor.id }).eq('id', String(body.id || '')).eq('leave_type', 'holiday').is('cancelled_at', null);
+    return error ? fail('Não foi possível cancelar o período.', 400) : reply({ ok: true });
+  }
+  if (action === 'holidays:balance') {
+    if (!canManage(actor)) return fail('Só a gerência pode alterar saldos.', 403);
+    const staffId = String(body.staffId || ''), year = Number(body.year), entitled = Number(body.entitled), used = Number(body.used);
+    if (!/^[0-9a-f-]{36}$/i.test(staffId) || !Number.isInteger(year) || year < 2000 || year > 2200 || !Number.isFinite(entitled) || entitled < 0 || !Number.isFinite(used) || used < 0 || used > entitled) return fail('Confirma os valores do saldo.');
+    const { error } = await db.from('leave_balances').upsert({ staff_id: staffId, reference_year: year, entitled_days: entitled, used_days: used, updated_by: actor.id, updated_at: new Date().toISOString() }, { onConflict: 'staff_id,reference_year' });
+    return error ? fail('Não foi possível guardar o saldo.', 400) : reply({ ok: true });
+  }
 
   if (action === 'recipes:list') {
     if (!canManage(actor)) return fail('Sem permissões para consultar fichas técnicas.', 403);

@@ -33,13 +33,13 @@ O ecrã permite escolher utilizador e introduzir PIN. Os valores iniciais não e
 
 ## Higienização e manual
 
-A demonstração agora encaminha para o manual HACCP oficial aprovado e não classifica temperaturas com limites inventados. O manual do estabelecimento continua a prevalecer. A migração define as tarefas base:
+O menu HACCP inclui um modelo geral para café/bar com bebidas alcoólicas e não alcoólicas e tostas; o manual oficial aprovado continua a prevalecer. A grelha mensal de temperaturas regista manhã/tarde e identifica quem submeteu. A grelha de higienização regista conclusões por tarefa/dia, responsável, data/hora, produto e observações. Não são definidos limites de temperatura pela aplicação. A migração define as tarefas base:
 
 - Diárias: bancadas/superfícies, chão, instrumentos e utensílios.
 - Semanais: vidros, pó, teias de aranha e frigoríficos.
 - Mensais: paredes, teto, candeeiros, congelador e zona do armazém.
 
-O registo persistente, responsável, data/hora, observações e produto usado estão modelados em `cleaning_records`; falta a interface/API autenticada que os utiliza.
+O registo persistente, responsável, data/hora, observações e produto usado são escritos em `cleaning_records` pela API autenticada. A coluna JSON existente `checklist_data` guarda manhã/tarde nos registos de temperatura, sem migração adicional.
 
 ## Vercel e passos de produção
 
@@ -47,7 +47,7 @@ Não há `vercel.json`, `.vercel/project.json` ou `package.json` na pasta `Pregu
 
 Foi criado o projeto Supabase `hmuzfvmpstejcnyiwbtx` na organização “Preguiça Manager”, em Frankfurt. A cotação devolvida no momento da criação foi 0 USD/mês. A base não recebeu artigos, utilizadores laborais adicionais ou saldos inventados. Estão aplicados o esquema e as migrações de funções, higiene, férias e PIN. Os únicos perfis são Gerência e Alice. Confirmar custos atuais no painel Supabase, pois dependem do plano e utilização.
 
-Esta entrega liga a entrada por PIN e a gestão de utilizadores à base de dados. As fichas técnicas também são carregadas e guardadas pelo servidor, e a API recusa consultas de staff. Stock, horários, férias, assiduidade, HACCP/higiene e alertas continuam demonstrativos e sem persistência na interface. O aviso de pré-produção aparece na aplicação. Não usar esses módulos como registos oficiais nem promover a branch até ligar e testar cada operação persistente e a respetiva autorização server-side. O browser contém apenas a chave publicável.
+A branch liga PIN/utilizadores, fichas, stock, férias e HACCP/higiene a operações server-side com controlo por função. Horários, assiduidade e alertas continuam demonstrativos. O aviso de pré-produção permanece na aplicação. Não usar os módulos ilustrativos como registos oficiais nem promover a branch até ligar e testar os módulos ainda pendentes. O browser contém apenas a chave publicável.
 
 As 76 fichas vindas do ZIP estão na tabela `product_recipes` e são servidas apenas a Gerência. Custos e margens continuam estimativas não confirmadas.
 
@@ -59,7 +59,7 @@ Antes da aplicação em produção, criar utilizadores de teste ligados a perfis
 2. Staff consegue ler inventário e compras, atualizar `quantity`, e recebe erro ao tentar alterar mínimo, fornecedor, preço ou criar artigo.
 3. Staff consegue consultar as vistas de férias, mas não selecionar/escrever diretamente em `leave_requests` ou editar saldos.
 4. Staff não consegue ler horários, assiduidade, fichas técnicas ou auditoria.
-5. Staff consegue inserir histórico de higiene apenas em seu nome; não consegue editar/apagar o histórico nem adicionar tarefa mensal.
+5. Staff consegue inserir histórico de higiene e leituras de temperatura apenas em seu nome; não consegue editar/apagar o histórico nem adicionar tarefa mensal.
 6. Manager e owner conseguem executar operações de gestão permitidas. A conta owner mantém leitura/escrita sobre os dados anteriores.
 
-Os testes reais do Edge Function confirmaram PIN incorreto recusado, login de Alice e Gerência, 403 para gestão de utilizadores e leitura de fichas por Alice, e criação, edição, desativação e bloqueio de login de uma conta temporária. A conta temporária foi removida após o teste. Falta testar cada módulo completo na interface e validar as permissões de dados nas operações que ainda não foram implementadas.
+Testes reais do Edge Function confirmaram login de Alice, leitura HACCP, escrita de temperatura e higienização por Alice, 403 para adicionar tarefa mensal por Alice, adição mensal por Gerência e leitura posterior na grelha API. As três linhas de QA foram removidas após o teste; não restaram registos HACCP/higiene de teste. Falta testar a interface visual completa e concluir horários, assiduidade e alertas.
