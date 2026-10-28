@@ -41,7 +41,7 @@ Deno.serve(async (req: Request) => {
   const action = String(body.action || '');
 
   if (action === 'list-users') {
-    const { data, error } = await db.from('profiles').select('id,display_name').eq('active', true).order('display_name');
+    const { data, error } = await db.from('profiles').select('id,display_name').eq('active', true).not('pin_hash','is',null).order('display_name');
     if (error) return fail('Não foi possível carregar os utilizadores.', 500);
     return reply({ users: data || [] });
   }
@@ -78,7 +78,7 @@ Deno.serve(async (req: Request) => {
   if (action === 'session') return reply({ profile: actor });
 
   if (action === 'stock:list') {
-    const { data, error } = await db.from('stock_items').select('id,name,unit,quantity,minimum_quantity,supplier_name,unit_cost_ex_vat,active').eq('active', true).order('name');
+    const { data, error } = await db.from('stock_items').select('id,name,category,unit,quantity,minimum_quantity,supplier_name,unit_cost_ex_vat,active').eq('active', true).order('category').order('name');
     return error ? fail('Não foi possível carregar o inventário.', 500) : reply({ items: data || [] });
   }
   if (action === 'stock:quantity') {
@@ -93,9 +93,89 @@ Deno.serve(async (req: Request) => {
     const name = String(item.name || '').trim(), unit = String(item.unit || '').trim();
     const quantity = Number(item.quantity), minimum = Number(item.minimum_quantity), cost = item.unit_cost_ex_vat == null ? null : Number(item.unit_cost_ex_vat);
     if (!name || !unit || name.length > 120 || !Number.isFinite(quantity) || quantity < 0 || !Number.isFinite(minimum) || minimum < 0 || (cost !== null && (!Number.isFinite(cost) || cost < 0))) return fail('Confirma os dados do artigo.');
-    const record = { name, unit, quantity, minimum_quantity: minimum, supplier_name: String(item.supplier_name || '').slice(0, 160) || null, unit_cost_ex_vat: cost, updated_by: actor.id, updated_at: new Date().toISOString(), active: true };
+    const record = { name, category: String(item.category || 'Outros').slice(0, 80), unit, quantity, minimum_quantity: minimum, supplier_name: String(item.supplier_name || '').slice(0, 160) || null, unit_cost_ex_vat: cost, updated_by: actor.id, updated_at: new Date().toISOString(), active: true };
     const result = item.id ? await db.from('stock_items').update(record).eq('id', item.id).select('id').single() : await db.from('stock_items').insert(record).select('id').single();
     return result.error ? fail('Não foi possível guardar o artigo.', 400) : reply({ id: result.data.id });
+  }
+
+  if (action === 'suppliers:list') {
+    const { data, error } = await db.from('suppliers').select('id,name,phone,order_weekday,delivery_weekday,active').eq('active', true).order('order_weekday').order('name');
+    return error ? fail('Não foi possível carregar fornecedores.', 500) : reply({ suppliers: data || [] });
+  }
+  if (action === 'suppliers:save') {
+    if (!canManage(actor)) return fail('Só a gerência pode editar fornecedores.', 403);
+    const s = body.supplier && typeof body.supplier === 'object' ? body.supplier as Record<string, unknown> : {};
+    const name = String(s.name || '').trim(), orderDay = Number(s.order_weekday), deliveryDay = Number(s.delivery_weekday);
+    if (!name || name.length > 120 || !Number.isInteger(orderDay) || orderDay < 1 || orderDay > 7 || !Number.isInteger(deliveryDay) || deliveryDay < 1 || deliveryDay > 7) return fail('Confirma os dados do fornecedor.');
+    const { error } = await db.from('suppliers').upsert({ name, phone: String(s.phone || '').trim().slice(0,40) || null, order_weekday: orderDay, delivery_weekday: deliveryDay, updated_at: new Date().toISOString() }, { onConflict: 'name' });
+    return error ? fail('Não foi possível guardar o fornecedor.', 400) : reply({ ok: true });
+  }
+
+  if (action === 'facility-cleaning:list') {
+    const month = String(body.month || new Date().toISOString().slice(0,7));
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return fail('Indica um mês válido.');
+    const [year, mon] = month.split('-').map(Number), start = `${month}-01`, end = new Date(Date.UTC(year,mon,1)).toISOString();
+    let query = db.from('facility_cleaning_records').select('id,recorded_at,area_equipment,responsible_id,responsible_rubric,observations,product_used').gte('recorded_at', `${start}T00:00:00Z`).lt('recorded_at',end).order('recorded_at',{ascending:false});
+    const { data, error } = await query;
+    if (error) return fail('Não foi possível carregar o registo de instalações.',500);
+    const ids = [...new Set((data || []).map(r=>r.responsible_id))];
+    const { data: profiles } = ids.length ? await db.from('profiles').select('id,display_name').in('id',ids) : {data:[]};
+    return reply({ records:(data||[]).map(r=>({...r,responsible:(profiles||[]).find(p=>p.id===r.responsible_id)?.display_name||'—'})) });
+  }
+  if (action === 'facility-cleaning:record') {
+    const area = String(body.area || '').trim(), rubric = String(body.rubric || actor.display_name.split(/\s+/).map(x=>x[0]).join('').slice(0,4)).trim();
+    const date = String(body.date || new Date().toISOString().slice(0,10)), time = String(body.time || new Date().toISOString().slice(11,16)), recordedAt = String(body.recordedAt || '');
+    if (!area || area.length > 180 || !rubric || rubric.length > 30 || !validDate(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || Number.isNaN(Date.parse(recordedAt))) return fail('Preenche área, data, hora e rubrica.');
+    const { error } = await db.from('facility_cleaning_records').insert({ recorded_at:new Date(recordedAt).toISOString(), area_equipment:area, responsible_id:actor.id, responsible_rubric:rubric, observations:String(body.observations||'').slice(0,1000), product_used:String(body.product||'').slice(0,200) });
+    return error ? fail('Não foi possível guardar o registo.',400) : reply({ok:true});
+  }
+
+  if (action === 'attendance:list') {
+    const month = String(body.month || new Date().toISOString().slice(0,7));
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return fail('Indica um mês válido.');
+    const [year,mon]=month.split('-').map(Number), start=`${month}-01`, end=new Date(Date.UTC(year,mon,1)).toISOString();
+    let q=db.from('attendance_records').select('id,staff_id,kind,occurred_at,note,status,created_at').gte('occurred_at',`${start}T00:00:00Z`).lt('occurred_at',end).order('occurred_at',{ascending:false});
+    if(actor.role==='staff') q=q.eq('staff_id',actor.id);
+    const {data,error}=await q; if(error)return fail('Não foi possível carregar assiduidade.',500);
+    const ids=[...new Set((data||[]).map(x=>x.staff_id))], {data:profiles}=ids.length?await db.from('profiles').select('id,display_name').in('id',ids):{data:[]};
+    return reply({records:(data||[]).map(x=>({...x,display_name:(profiles||[]).find(p=>p.id===x.staff_id)?.display_name||'—'}))});
+  }
+  if (action === 'attendance:record') {
+    const kind=String(body.kind||''), at=String(body.occurredAt||'');
+    if(!['clock_in','clock_out','late','early_departure','absence','medical_leave','other'].includes(kind)||Number.isNaN(Date.parse(at))||Date.parse(at)>Date.now())return fail('Indica tipo, data e hora válidos.');
+    const {error}=await db.from('attendance_records').insert({staff_id:actor.id,submitted_by:actor.id,kind,occurred_at:new Date(at).toISOString(),note:String(body.note||'').slice(0,1000),status:'pending'});
+    return error?fail('Não foi possível guardar a assiduidade.',400):reply({ok:true});
+  }
+  if (action === 'attendance:review') {
+    if(!canManage(actor))return fail('Só a gerência pode validar registos.',403);
+    const id=String(body.id||''), status=String(body.status||'');
+    if(!/^[0-9a-f-]{36}$/i.test(id)||!['validated','rejected','corrected'].includes(status))return fail('Indica uma validação válida.');
+    const {error}=await db.from('attendance_records').update({status,reviewed_by:actor.id,reviewed_at:new Date().toISOString(),correction_reason:String(body.reason||'').slice(0,1000)}).eq('id',id);
+    return error?fail('Não foi possível validar o registo.',400):reply({ok:true});
+  }
+
+  if (action === 'schedule:list') {
+    const week=String(body.weekStart||''); if(!validDate(week))return fail('Indica a segunda-feira da semana.');
+    const {data:schedules,error}=await db.from('weekly_schedules').select('id,week_start,version,status,published_at').eq('week_start',week).in('status',actor.role==='staff'?['published']:['draft','published']).order('version',{ascending:false}).limit(1);
+    if(error)return fail('Não foi possível carregar o horário.',500); const schedule=schedules?.[0];
+    const [profiles,shifts]=await Promise.all([db.from('profiles').select('id,display_name,weekly_hours').eq('active',true).eq('role','staff').order('display_name'),schedule?db.from('shifts').select('id,staff_id,shift_date,starts_at,ends_at,break_minutes,notes').eq('schedule_id',schedule.id).order('shift_date'):Promise.resolve({data:[],error:null})]);
+    return reply({schedule:schedule||null,profiles:profiles.data||[],shifts:shifts.data||[]});
+  }
+  if (action === 'schedule:save') {
+    if(!canManage(actor))return fail('Só a gerência pode editar horários.',403);
+    const week=String(body.weekStart||''), items=Array.isArray(body.shifts)?body.shifts:[]; if(!validDate(week)||items.length>80)return fail('Horário inválido.');
+    const existing=await db.from('weekly_schedules').select('id,version').eq('week_start',week).eq('status','draft').order('version',{ascending:false}).limit(1).maybeSingle();
+    let schedule=existing.data;
+    if(!schedule){const prior=await db.from('weekly_schedules').select('version').eq('week_start',week).order('version',{ascending:false}).limit(1).maybeSingle();const made=await db.from('weekly_schedules').insert({week_start:week,version:(prior.data?.version||0)+1,status:'draft'}).select('id,version').single();if(made.error)return fail('Não foi possível criar o rascunho.',400);schedule=made.data;}
+    const clean=[]; for(const s of items){if(!validDate(String(s.date||''))||String(s.date)<week||String(s.date)>=new Date(Date.parse(week+'T00:00:00Z')+7*86400000).toISOString().slice(0,10)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(s.start||''))||!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(s.end||''))||!/^[0-9a-f-]{36}$/i.test(String(s.staffId||'')))return fail('Há um turno inválido.');clean.push({schedule_id:schedule.id,staff_id:s.staffId,shift_date:s.date,starts_at:s.start,ends_at:s.end,break_minutes:Math.max(0,Number(s.breakMinutes)||0),notes:String(s.notes||'').slice(0,300)});}
+    const staffIds=[...new Set(clean.map(x=>x.staff_id))]; if(staffIds.length){const {data:validStaff,error:staffError}=await db.from('profiles').select('id').in('id',staffIds).eq('active',true).eq('role','staff');if(staffError||validStaff?.length!==staffIds.length)return fail('O horário pode incluir apenas colaboradoras ativas.',403)}
+    await db.from('shifts').delete().eq('schedule_id',schedule.id); if(clean.length){const {error}=await db.from('shifts').insert(clean);if(error)return fail('Não foi possível guardar os turnos.',400)} return reply({ok:true,scheduleId:schedule.id});
+  }
+  if (action === 'schedule:publish') {
+    if(!canManage(actor))return fail('Só a gerência pode publicar horários.',403);
+    const id=String(body.scheduleId||''); if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Horário inválido.');
+    const {error}=await db.from('weekly_schedules').update({status:'published',published_by:actor.id,published_at:new Date().toISOString()}).eq('id',id).eq('status','draft');
+    return error?fail('Não foi possível publicar o horário.',400):reply({ok:true});
   }
 
   if (action === 'haccp:list') {
@@ -158,7 +238,7 @@ Deno.serve(async (req: Request) => {
   if (action === 'closures:save-day') {
     if (!canManage(actor)) return fail('Só a gerência pode alterar o mapa de encerramentos.', 403);
     const date = String(body.date || ''), type = String(body.type || ''), note = String(body.note || '').trim();
-    if (!validDate(date) || !['public_holiday', 'collective_vacation'].includes(type) || note.length > 300) return fail('Confirma a data, classificação e nota do encerramento.');
+    if (!validDate(date) || !['public_holiday', 'collective_vacation', 'weekly_rest'].includes(type) || note.length > 300) return fail('Confirma a data, classificação e nota do encerramento.');
     const { error } = await db.from('collective_closure_days').upsert({ closed_date: date, closure_type: type, note: note || null, created_by: actor.id, updated_at: new Date().toISOString() }, { onConflict: 'closed_date' });
     return error ? fail('Não foi possível guardar o encerramento.', 400) : reply({ ok: true });
   }
@@ -230,7 +310,7 @@ Deno.serve(async (req: Request) => {
   if (action.startsWith('users:')) {
     if (!canManage(actor)) return fail('Só a gerência pode gerir utilizadores.', 403);
     if (action === 'users:list') {
-      const { data, error } = await db.from('profiles').select('id,display_name,role,active,created_at').order('created_at');
+      const { data, error } = await db.from('profiles').select('id,display_name,role,active,weekly_hours,created_at').order('created_at');
       return error ? fail('Não foi possível carregar a equipa.', 500) : reply({ users: data || [] });
     }
     if (action === 'users:create') {
