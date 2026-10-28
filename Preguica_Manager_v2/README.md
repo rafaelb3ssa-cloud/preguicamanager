@@ -2,7 +2,7 @@
 
 ## Estado e pré-visualização
 
-A branch `codex/preguica-manager-v2-permissions` está ligada ao projeto Vercel `preguicamanager-web`. O deploy desta branch é uma pré-visualização; a produção não foi promovida. O HTML servido pelo último preview usa `web/index.html` e recebeu HTTP 200.
+A branch `codex/preguica-manager-v2-permissions` está ligada ao projeto Vercel `preguicamanager-web`. A versão aprovada foi publicada em produção a partir do commit `f9722bd7b9c1b4c28a411fffb838dbc2dc67d4e9`. O domínio `preguicamanager-web.vercel.app` serve `web/index.html` e recebeu HTTP 200 após a publicação. A produção permanece associada ao projeto Vercel existente.
 
 A autenticação por PIN e as operações sensíveis passam pelo Edge Function `preguica-auth`, com sessões opacas e autorização no servidor. PINs são armazenados como hashes; a chave service-role fica apenas no ambiente da Edge Function. O ecrã de login apresenta apenas Gerência ou Colaborador. A escolha determina o perfil no servidor; o PIN nunca é validado só no browser. Para já, o login Colaborador usa o perfil Alice existente. Na aplicação, esse perfil vê apenas HACCP e os seus submenus, fichas técnicas em consulta e stock/compras. Só a Gerência vê os restantes módulos e pode editar fichas, configurar artigos ou gerir horários, férias e equipa. Os módulos de horários, assiduidade, higienização das instalações, fornecedores e stock usam operações persistentes na base de dados. Alertas automáticos continuam demonstrativos.
 
@@ -38,4 +38,4 @@ A segurança deve continuar a ser revista antes de promover a produção. O Supa
 
 ## Vercel
 
-Não há `vercel.json`, `package.json` nem `.vercel/project.json` no repositório. O projeto Vercel existente está associado ao repositório e os previews desta branch servem a aplicação corretamente; nenhuma configuração de build ou raiz foi alterada. O domínio de produção não foi atualizado.
+Não há `vercel.json`, `package.json` nem `.vercel/project.json` no repositório. O projeto Vercel existente está associado ao repositório e os previews desta branch servem a aplicação corretamente; nenhuma configuração de build ou raiz foi alterada. A produção foi construída pela Vercel com a raiz `Preguica_Manager_v2/web`; o deploy ficou READY e o alias principal foi confirmado.
