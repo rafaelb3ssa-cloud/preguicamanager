@@ -1,39 +1,41 @@
 # Preguiça Manager v2
 
-## Estado atual
+## Estado e pré-visualização
 
-A branch liga autenticação por PIN, perfis, stock/compras, férias, HACCP/higiene e fichas técnicas ao Supabase através do Edge Function. PINs usam hashes bcrypt e sessões opacas expiram após 12 horas. Existem os perfis iniciais Gerência e Alice. Horários, assiduidade e alertas ainda estão em demonstração; a aplicação não está pronta para produção. O mapa de férias é coletivo e lista datas de encerramento, distinguindo feriados de férias coletivas.
+A branch `codex/preguica-manager-v2-permissions` está ligada ao projeto Vercel `preguicamanager-web`. O deploy desta branch é uma pré-visualização; a produção não foi promovida. O HTML servido pelo último preview usa `web/index.html` e recebeu HTTP 200.
 
-Os módulos originais foram mantidos. Os dados de painel, horários, assiduidade e alertas continuam ilustrativos. O inventário e saldos de férias no novo projeto não foram inventados: a gerência deve confirmar e inserir os valores reais.
+A autenticação por PIN e as operações sensíveis passam pelo Edge Function `preguica-auth`, com sessões opacas e autorização no servidor. PINs são armazenados como hashes; a chave service-role fica apenas no ambiente da Edge Function. Gerência pode administrar utilizadores; colaboradoras têm acesso ao HACCP, inventário e compras, mapa anual de férias, horário publicado e aos próprios registos de assiduidade. Os módulos de horários, assiduidade, higienização das instalações, fornecedores e stock usam operações persistentes na base de dados. Alertas automáticos continuam demonstrativos.
 
-As 76 fichas de referência do ZIP ficam na tabela `product_recipes` e só a Gerência as carrega pela API. Os custos são estimativas e devem ser validados com faturas e receitas reais; alterações feitas pela Gerência passam a ser guardadas na base de dados.
+## Equipa e horários
 
-## Abrir a pré-visualização
+Alice tem base semanal de 40 horas; Inês Machado, 40 horas; Inês Sequeira, 25 horas. Inês Machado e Inês Sequeira já estão na equipa, mas ainda não têm PIN definido e por isso não aparecem no ecrã de login. A Gerência pode atribuir os PINs no módulo Equipa.
 
-Abrir a URL de pré-visualização da branch Vercel. O HTML chama o Edge Function do Supabase para autenticar. A pré-visualização mostra um aviso sobre os módulos que continuam demonstrativos.
+A grelha semanal permite inserir um ou mais intervalos por dia, guardar rascunhos, publicar para consulta da equipa e criar uma revisão de um horário publicado. Horas reais de turnos ainda devem ser preenchidas pela Gerência; não foram inventados horários.
 
-## Segurança e migração
+## Férias coletivas de 2026
 
-O esquema de base de dados inicial não ativava RLS. As migrações aditivas em `database/migrations/` ativam as políticas por função, funções RPC de inventário, tarefas/histórico de higienização e vistas limitadas de férias. Não eliminam tabelas ou linhas existentes. Confirmar a conta `owner` antes de produção.
+O mapa mostra os dias encerrados, distinguindo férias coletivas, folga semanal e feriados. Foram registados os períodos 2–18 de janeiro, 29 de junho–5 de julho e 3–6 de agosto. Também permanecem os encerramentos de dezembro: dias 1, 8, 24, 25 e 31.
 
-As migrações de identidade criam sessões e bloqueio progressivo, sem guardar PIN em texto simples. Para alterar o PIN de uma colaboradora, abre Equipa e seleciona Editar. A desativação preserva histórico e termina as sessões da conta.
+O total anual é 22 dias de férias: 11 em janeiro, 5 em junho/julho, 4 em agosto e 2 em dezembro. Oito sábados/domingos aparecem como folga e não descontam férias; os três feriados registados não descontam férias. A agenda pode ser descarregada em `.ics`.
 
-Para o modelo de funções, permissões e próximos passos de publicação, consultar `SECURITY_AND_DEPLOYMENT.md`.
+## Stock e fornecedores
+
+A lista sugerida calcula `max(0, mínimo configurado - quantidade atual)`. A colaboradora pode atualizar quantidades reais, mas não pode criar artigos nem mudar mínimos, preços ou fornecedores. Existem categorias para organizar o inventário.
+
+Fornecedores e entregas registados: Recheio (segunda/terça), Sumol Compal (terça/quarta), Super Bock e gelo (quarta/quinta), pão, garrafeira e fruta (quinta/sexta). Telefones estão vazios porque não foram fornecidos.
+
+O ficheiro Numbers recebido é um inventário de dezembro de 2025. Não foram importadas quantidades antigas como stock atual. Para importar nomes, categorias, unidades e custos sem quantidades, exportar o documento para Excel (`.xlsx`) ou CSV e enviá-lo.
+
+## HACCP e higiene
+
+O manual de referência é um modelo para café/bar com bebidas com e sem álcool e tostas; o manual oficial aprovado do estabelecimento continua a ser a referência. Não são inventados limites de temperatura. As grelhas mensais de temperaturas e higienização mantêm o histórico existente. Foi acrescentado o registo cronológico de higienização das instalações com dia/hora, área/equipamento, responsável, rubrica, produto e observações.
+
+## Base de dados e alterações
+
+O esquema original e os dados existentes foram preservados. A migração `20261028185524_team_schedule_suppliers_facility_log_and_leave_days.sql` acrescenta apenas a base semanal da equipa, categoria de stock, fornecedores, registos de higienização das instalações e os dias coletivos indicados.
+
+A segurança deve continuar a ser revista antes de promover a produção. O Supabase Security Advisor ainda aponta funções `SECURITY DEFINER` preexistentes acessíveis a `authenticated`; as tabelas `app_sessions` e `pin_login_attempts` têm RLS sem políticas e são usadas pelo serviço privilegiado de autenticação. Estes avisos não foram alterados nesta branch.
 
 ## Vercel
 
-Não foi encontrada configuração Vercel versionada (`vercel.json`, `.vercel/project.json`) nem configuração de build (`package.json`). O preview da branch foi construído com sucesso e serve esta demonstração estática. A raiz/configuração efetiva deve ser confirmada antes de alterar o build. A demonstração não está protegida por RLS: RLS só protege pedidos autenticados à base de dados.
-
-## HACCP e stock
-
-O menu HACCP inclui um modelo de referência para café/bar (bebidas com e sem álcool e tostas) e separadores de Manual, Temperaturas, Higienização e Checklists. O manual oficial aprovado pelo estabelecimento continua a prevalecer e a aplicação não inventa limites. Temperaturas usam uma grelha mensal com equipamento, manhã/tarde e rubrica; higienização usa uma grelha por tarefa/dia, mais histórico de produto e observações. As 12 tarefas-base ficam na base de dados. A base tem atualmente zero registos de temperaturas e zero conclusões de limpeza; não foram importados valores ilegíveis da fotografia. O mapa anual tem as cinco datas de dezembro de 2026 indicadas pela Gerência: 1, 8 e 25 como feriados; 24 e 31 como férias coletivas. O mapa pode ser exportado como ficheiro `.ics` para importar na agenda.
-
-A quantidade sugerida a comprar deve ser calculada como `max(0, mínimo configurado - quantidade atual)`. O artigo guarda unidade, fornecedor e custo quando estes dados existem.
-
-## Antes de produção
-
-1. O projeto Supabase `hmuzfvmpstejcnyiwbtx` foi criado na região `eu-central-1` (Frankfurt), na organização “Preguiça Manager”; a cotação consultada na criação foi 0 USD/mês. O projeto estava vazio e as migrações iniciais foram aplicadas. Confirmar os custos atuais no painel Supabase porque podem mudar com o uso/plano.
-2. Ligar horários, assiduidade e alertas às tabelas através de operações server-side com autorização por função.
-3. Não há artigos reais nem saldos laborais confirmados no novo projeto. As cinco datas de encerramento de dezembro de 2026 foram inseridas no mapa; os pedidos/saldos antigos continuam preservados nas tabelas legadas. Nenhum dado anterior foi eliminado ou copiado.
-4. Completar testes de cada módulo com Gerência e Alice e confirmar que tentativas não autorizadas são recusadas pelo servidor/base de dados.
-5. Confirmar backups/restauro, raiz/build Vercel e os dados reais do inventário antes de publicar em produção.
+Não há `vercel.json`, `package.json` nem `.vercel/project.json` no repositório. O projeto Vercel existente está associado ao repositório e os previews desta branch servem a aplicação corretamente; nenhuma configuração de build ou raiz foi alterada. O domínio de produção não foi atualizado.
