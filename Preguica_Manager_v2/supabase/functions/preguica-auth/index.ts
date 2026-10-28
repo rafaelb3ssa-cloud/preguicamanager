@@ -159,7 +159,18 @@ Deno.serve(async (req: Request) => {
     const {data:schedules,error}=await db.from('weekly_schedules').select('id,week_start,version,status,published_at').eq('week_start',week).in('status',actor.role==='staff'?['published']:['draft','published']).order('version',{ascending:false}).limit(1);
     if(error)return fail('Não foi possível carregar o horário.',500); const schedule=schedules?.[0];
     const [profiles,shifts]=await Promise.all([db.from('profiles').select('id,display_name,weekly_hours').eq('active',true).eq('role','staff').order('display_name'),schedule?db.from('shifts').select('id,staff_id,shift_date,starts_at,ends_at,break_minutes,notes').eq('schedule_id',schedule.id).order('shift_date'):Promise.resolve({data:[],error:null})]);
-    return reply({schedule:schedule||null,profiles:profiles.data||[],shifts:shifts.data||[]});
+    const monthStart=`${week.slice(0,7)}-01`;
+    const {data:priorSchedules,error:priorError}=await db.from('weekly_schedules').select('id,week_start,version').eq('status','published').gte('week_start',monthStart).lt('week_start',week).order('version',{ascending:false});
+    if(priorError)return fail('Não foi possível calcular as horas acumuladas.',500);
+    const latestPrior=new Map<string,string>(); for(const item of priorSchedules||[])if(!latestPrior.has(item.week_start))latestPrior.set(item.week_start,item.id);
+    const priorIds=[...latestPrior.values()];
+    const {data:priorShifts,error:priorShiftsError}=priorIds.length?await db.from('shifts').select('staff_id,starts_at,ends_at,break_minutes').in('schedule_id',priorIds):{data:[],error:null};
+    if(priorShiftsError)return fail('Não foi possível calcular as horas acumuladas.',500);
+    const accumulated:Record<string,number>={};
+    const addHours=(row:{staff_id:string;starts_at:string;ends_at:string;break_minutes:number|null})=>{const [sh,sm]=String(row.starts_at).slice(0,5).split(':').map(Number),[eh,em]=String(row.ends_at).slice(0,5).split(':').map(Number);let minutes=eh*60+em-sh*60-sm;if(minutes<0)minutes+=1440;accumulated[row.staff_id]=(accumulated[row.staff_id]||0)+Math.max(0,minutes-(row.break_minutes||0))/60};
+    for(const row of priorShifts||[])addHours(row);
+    for(const row of shifts.data||[])addHours(row);
+    return reply({schedule:schedule||null,profiles:profiles.data||[],shifts:shifts.data||[],accumulated});
   }
   if (action === 'schedule:save') {
     if(!canManage(actor))return fail('Só a gerência pode editar horários.',403);
