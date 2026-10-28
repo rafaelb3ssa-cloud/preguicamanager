@@ -28,11 +28,19 @@ O ficheiro Numbers recebido é um inventário de dezembro de 2025. Não foram im
 
 ## HACCP e higiene
 
-O manual de referência é um modelo para café/bar com bebidas com e sem álcool e tostas; o manual oficial aprovado do estabelecimento continua a ser a referência. Não são inventados limites de temperatura. As grelhas mensais de temperaturas e higienização mantêm o histórico existente. Foi acrescentado o registo cronológico de higienização das instalações com dia/hora, área/equipamento, responsável, rubrica, produto e observações.
+O guia ilustrado para café/bar com bebidas com e sem álcool e tostas é complementar; o manual oficial aprovado do estabelecimento continua a ser a referência. Não são inventados limites de temperatura. As grelhas mensais de temperaturas e higienização mantêm o histórico existente. Foi acrescentado o registo cronológico de higienização das instalações com dia/hora, área/equipamento, responsável, rubrica, produto e observações. A confirmação individual de leitura/formação guarda colaborador, revisão do manual e data/hora no servidor.
+
+Os equipamentos de frio são identificados como Frigo 1 (bar), Frigo 2 (cozinha), Arca 1 (congelador do armazém) e Arca 2 (congelador do gelo). Os nomes anteriormente usados nos registos históricos não são alterados.
+
+## Encomendas diárias e receitas
+
+O módulo Stock & compras passa a chamar-se Encomendas diárias. Cada produto existente pode ser selecionado e ter quantidade de encomenda registada por dia; a quantidade começa a zero quando ainda não existe encomenda guardada. A quantidade atual continua editável para inventário, enquanto mínimos, preços e fornecedores permanecem só para a gerência. As encomendas ficam em `daily_order_items` com RLS ativo e sem leitura direta por chaves públicas.
+
+As fichas técnicas incluem uma área reservada para fotografia futura; o carregamento de imagens não está incluído nesta alteração.
 
 ## Base de dados e alterações
 
-O esquema original e os dados existentes foram preservados. A migração `20261028185524_team_schedule_suppliers_facility_log_and_leave_days.sql` acrescenta apenas a base semanal da equipa, categoria de stock, fornecedores, registos de higienização das instalações e os dias coletivos indicados.
+O esquema e dados originais foram preservados. A migração `20261028185524_team_schedule_suppliers_facility_log_and_leave_days.sql` acrescentou os recursos da equipa e a migração `20261028232648_daily_orders_and_haccp_training_acknowledgements.sql` acrescenta encomendas diárias e confirmações de formação, ambas com acesso mediado pela função de servidor.
 
 A segurança deve continuar a ser revista antes de promover a produção. O Supabase Security Advisor ainda aponta funções `SECURITY DEFINER` preexistentes acessíveis a `authenticated`; as tabelas `app_sessions` e `pin_login_attempts` têm RLS sem políticas e são usadas pelo serviço privilegiado de autenticação. Estes avisos não foram alterados nesta branch.
 

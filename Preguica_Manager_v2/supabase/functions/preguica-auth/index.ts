@@ -79,7 +79,7 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
-  const staffActions=new Set(['stock:list','stock:quantity','suppliers:list','haccp:list','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','recipes:list']);
+  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','recipes:list']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if (action === 'stock:list') {
@@ -92,6 +92,21 @@ Deno.serve(async (req: Request) => {
     const { error } = await db.from('stock_items').update({ quantity, updated_by: actor.id, updated_at: new Date().toISOString() }).eq('id', id).eq('active', true);
     return error ? fail('Não foi possível atualizar a quantidade.', 400) : reply({ ok: true });
   }
+  if (action === 'daily-orders:list') {
+    const date=String(body.date||new Date().toISOString().slice(0,10));
+    if(!validDate(date))return fail('Indica uma data válida.');
+    const {data,error}=await db.from('daily_order_items').select('stock_item_id,quantity,is_selected').eq('order_date',date);
+    return error?fail('Não foi possível carregar a encomenda diária.',500):reply({items:data||[]});
+  }
+  if (action === 'daily-orders:save') {
+    const date=String(body.date||''),items=Array.isArray(body.items)?body.items:[];
+    if(!validDate(date)||items.length>500)return fail('Encomenda diária inválida.');
+    const clean=[];for(const item of items){const row=item&&typeof item==='object'?item as Record<string,unknown>:{};const itemId=String(row.itemId||''),quantity=Number(row.quantity);if(!/^[0-9a-f-]{36}$/i.test(itemId)||!Number.isFinite(quantity)||quantity<0)return fail('Há um produto ou quantidade inválida.');clean.push({order_date:date,stock_item_id:itemId,quantity,is_selected:row.selected===true,ordered_by:actor.id,updated_at:new Date().toISOString()})}
+    if(!clean.length)return reply({ok:true});
+    const {error}=await db.from('daily_order_items').upsert(clean,{onConflict:'order_date,stock_item_id'});
+    return error?fail('Não foi possível guardar a encomenda diária.',400):reply({ok:true});
+  }
+
   if (action === 'stock:configure') {
     if (!canManage(actor)) return fail('Só a gerência pode criar ou configurar artigos.', 403);
     const item = body.item && typeof body.item === 'object' ? body.item as Record<string, unknown> : {};
@@ -192,6 +207,20 @@ Deno.serve(async (req: Request) => {
     const id=String(body.scheduleId||''); if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Horário inválido.');
     const {error}=await db.from('weekly_schedules').update({status:'published',published_by:actor.id,published_at:new Date().toISOString()}).eq('id',id).eq('status','draft');
     return error?fail('Não foi possível publicar o horário.',400):reply({ok:true});
+  }
+
+  if (action === 'haccp:training-status') {
+    const revision='cafe-preguica-haccp-manual-v1';
+    let query=db.from('haccp_training_acknowledgements').select('profile_id,manual_revision,acknowledged_at').eq('manual_revision',revision).order('acknowledged_at',{ascending:false});
+    if(actor.role==='staff')query=query.eq('profile_id',actor.id);
+    const {data,error}=await query;if(error)return fail('Não foi possível carregar as confirmações de formação.',500);
+    const ids=[...new Set((data||[]).map(x=>x.profile_id))],{data:profiles}=ids.length?await db.from('profiles').select('id,display_name').in('id',ids):{data:[]};
+    return reply({revision,acknowledgements:(data||[]).map(x=>({...x,display_name:(profiles||[]).find(p=>p.id===x.profile_id)?.display_name||'—'}))});
+  }
+  if (action === 'haccp:training-acknowledge') {
+    const revision='cafe-preguica-haccp-manual-v1';
+    const {error}=await db.from('haccp_training_acknowledgements').upsert({profile_id:actor.id,manual_revision:revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,manual_revision'});
+    return error?fail('Não foi possível registar a confirmação.',400):reply({ok:true});
   }
 
   if (action === 'haccp:list') {
