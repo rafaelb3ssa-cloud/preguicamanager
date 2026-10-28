@@ -47,9 +47,9 @@ Não há `vercel.json`, `.vercel/project.json` ou `package.json` na pasta `Pregu
 
 Foi criado o projeto Supabase `hmuzfvmpstejcnyiwbtx` na organização “Preguiça Manager”, em Frankfurt. A cotação devolvida no momento da criação foi 0 USD/mês. A base não recebeu artigos, utilizadores laborais adicionais ou saldos inventados. Estão aplicados o esquema e as migrações de funções, higiene, férias e PIN. Os únicos perfis são Gerência e Alice. Confirmar custos atuais no painel Supabase, pois dependem do plano e utilização.
 
-Esta entrega liga apenas a entrada por PIN e a gestão de utilizadores à base de dados. Os módulos de stock, horários, férias, assiduidade, HACCP/higiene, fichas e alertas continuam demonstrativos e não têm persistência da interface. O aviso de pré-produção aparece na aplicação. Não usar esses módulos como registos oficiais nem promover a branch até ligar e testar cada operação persistente e a respetiva autorização server-side. O browser contém apenas a chave publicável.
+Esta entrega liga a entrada por PIN e a gestão de utilizadores à base de dados. As fichas técnicas também são carregadas e guardadas pelo servidor, e a API recusa consultas de staff. Stock, horários, férias, assiduidade, HACCP/higiene e alertas continuam demonstrativos e sem persistência na interface. O aviso de pré-produção aparece na aplicação. Não usar esses módulos como registos oficiais nem promover a branch até ligar e testar cada operação persistente e a respetiva autorização server-side. O browser contém apenas a chave publicável.
 
-As 76 fichas vindas do ZIP aparecem na demonstração como dados de referência. Custos e margens não foram confirmados; alterações guardadas no navegador não entram na base de dados.
+As 76 fichas vindas do ZIP estão na tabela `product_recipes` e são servidas apenas a Gerência. Custos e margens continuam estimativas não confirmadas.
 
 ## Verificação necessária em staging
 
@@ -62,4 +62,4 @@ Antes da aplicação em produção, criar utilizadores de teste ligados a perfis
 5. Staff consegue inserir histórico de higiene apenas em seu nome; não consegue editar/apagar o histórico nem adicionar tarefa mensal.
 6. Manager e owner conseguem executar operações de gestão permitidas. A conta owner mantém leitura/escrita sobre os dados anteriores.
 
-Os testes reais do Edge Function confirmaram PIN incorreto recusado, login de Alice e Gerência, 403 de gestão para Alice, e criação, edição, desativação e bloqueio de login de uma conta temporária. A conta temporária foi removida após o teste. Falta testar cada módulo completo na interface e validar as permissões de dados nas operações API que ainda não foram implementadas.
+Os testes reais do Edge Function confirmaram PIN incorreto recusado, login de Alice e Gerência, 403 para gestão de utilizadores e leitura de fichas por Alice, e criação, edição, desativação e bloqueio de login de uma conta temporária. A conta temporária foi removida após o teste. Falta testar cada módulo completo na interface e validar as permissões de dados nas operações que ainda não foram implementadas.

@@ -6,7 +6,7 @@ Esta branch já tem entrada por utilizador/PIN e gestão de utilizadores ligadas
 
 O protótipo inclui painel, stock/compras, horários, férias, assiduidade, HACCP/higiene, fichas técnicas e alertas. Estes módulos foram mantidos. Os artigos e exemplos presentes no HTML não são uma base de dados de produção e não devem ser tratados como inventário ou registos oficiais.
 
-A página `web/index.html` agora inclui as 76 fichas do ZIP, com pesquisa, filtro por categoria, edição e exportação CSV. Os custos são referências estimadas e devem ser validados com faturas e receitas reais; alterações continuam apenas neste navegador.
+As 76 fichas de referência do ZIP ficam na tabela `product_recipes` e só a Gerência as carrega pela API. Os custos são estimativas e devem ser validados com faturas e receitas reais; alterações feitas pela Gerência passam a ser guardadas na base de dados.
 
 ## Abrir a pré-visualização
 

@@ -76,6 +76,31 @@ Deno.serve(async (req: Request) => {
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
 
+  if (action === 'recipes:list') {
+    if (!canManage(actor)) return fail('Sem permissões para consultar fichas técnicas.', 403);
+    const { data, error } = await db.from('product_recipes').select('id,name,category,sale_price_inc_vat,ingredient_cost_ex_vat,ingredients,method,active').eq('active', true).order('name');
+    if (error) return fail('Não foi possível carregar as fichas técnicas.', 500);
+    const recipes = (data || []).map((r) => ({
+      id: r.id, name: r.name, category: r.category, sale: Number(r.sale_price_inc_vat), cost: Number(r.ingredient_cost_ex_vat),
+      ingredients: Array.isArray(r.ingredients) ? r.ingredients.join('; ') : String(r.ingredients || ''), method: r.method || '',
+    }));
+    return reply({ recipes });
+  }
+
+  if (action === 'recipes:save') {
+    if (!canManage(actor)) return fail('Sem permissões para alterar fichas técnicas.', 403);
+    const r = (body.recipe && typeof body.recipe === 'object' ? body.recipe : {}) as Record<string, unknown>;
+    const name = String(r.name || '').trim(), sale = Number(r.sale), cost = Number(r.cost);
+    if (!name || name.length > 160 || !Number.isFinite(sale) || sale < 0 || !Number.isFinite(cost) || cost < 0) return fail('Confirma o nome e os valores da ficha.');
+    const record = { name, category: String(r.category || '').slice(0, 100), sale_price_inc_vat: sale, ingredient_cost_ex_vat: cost,
+      ingredients: [String(r.ingredients || '')], method: String(r.method || '').slice(0, 4000), active: true, updated_by: actor.id, updated_at: new Date().toISOString() };
+    const existingName = String(body.existingName || '').trim();
+    const { error } = existingName && existingName !== name
+      ? await db.from('product_recipes').update(record).eq('name', existingName)
+      : await db.from('product_recipes').upsert(record, { onConflict: 'name' });
+    return error ? fail('Não foi possível guardar a ficha.', 400) : reply({ ok: true });
+  }
+
   if (action.startsWith('users:')) {
     if (!canManage(actor)) return fail('Só a gerência pode gerir utilizadores.', 403);
     if (action === 'users:list') {
