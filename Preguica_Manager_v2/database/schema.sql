@@ -49,6 +49,7 @@ create table public.weekly_schedules (
   status text not null default 'draft' check (status in ('draft','published','superseded')),
   published_by uuid references public.profiles(id),
   published_at timestamptz,
+  accumulated_hours jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   unique(week_start, version)
 );
