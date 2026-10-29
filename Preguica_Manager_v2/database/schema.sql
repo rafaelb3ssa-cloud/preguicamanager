@@ -13,6 +13,7 @@ create table public.profiles (
   display_name text not null,
   role public.app_role not null default 'staff',
   active boolean not null default true,
+  schedule_access boolean not null default true,
   created_at timestamptz not null default now()
 );
 

@@ -19,7 +19,7 @@ const randomToken = () => {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 };
-type Profile = { id: string; display_name: string; role: 'owner' | 'manager' | 'staff'; active: boolean; activity_exempt: boolean };
+type Profile = { id: string; display_name: string; role: 'owner' | 'manager' | 'staff'; active: boolean; activity_exempt: boolean; schedule_access: boolean };
 
 async function currentProfile(req: Request): Promise<Profile | null> {
   const token = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || '';
@@ -27,7 +27,7 @@ async function currentProfile(req: Request): Promise<Profile | null> {
   const { data: session } = await db.from('app_sessions').select('profile_id, expires_at')
     .eq('token_hash', await sha(token)).gt('expires_at', new Date().toISOString()).maybeSingle();
   if (!session) return null;
-  const { data } = await db.from('profiles').select('id,display_name,role,active,activity_exempt').eq('id', session.profile_id).eq('active', true).maybeSingle();
+  const { data } = await db.from('profiles').select('id,display_name,role,active,activity_exempt,schedule_access').eq('id', session.profile_id).eq('active', true).maybeSingle();
   return data as Profile | null;
 }
 const canManage = (profile: Profile) => profile.role === 'owner' || profile.role === 'manager';
@@ -117,7 +117,7 @@ Deno.serve(async (req: Request) => {
       return fail('PIN incorreto.', 401);
     }
     await db.rpc('record_pin_login_attempt', { p_attempt_key: attemptKey, p_success: true });
-    const { data: profile, error } = await db.from('profiles').select('id,display_name,role,active,activity_exempt').eq('id', profileId).eq('active', true).single();
+    const { data: profile, error } = await db.from('profiles').select('id,display_name,role,active,activity_exempt,schedule_access').eq('id', profileId).eq('active', true).single();
     if (error || !profile) return fail('Utilizador indisponível.', 401);
     const token = randomToken();
     const { error: sessionError } = await db.from('app_sessions').insert({ token_hash: await sha(token), profile_id: profile.id, expires_at: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString() });
@@ -145,6 +145,7 @@ Deno.serve(async (req: Request) => {
   }
   const staffActions=new Set(['pin:change','suppliers:list','supplier-orders:list','supplier-orders:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
+  if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
 
   if(action==='onboarding:status'){
     const revision='welcome-preguica-v4';let query=db.from('staff_onboarding_acknowledgements').select('profile_id,revision,acknowledged_at').eq('revision',revision);
@@ -670,7 +671,7 @@ Deno.serve(async (req: Request) => {
   if (action.startsWith('users:')) {
     if (!canManage(actor)) return fail('Só a gerência pode gerir utilizadores.', 403);
     if (action === 'users:list') {
-      const { data, error } = await db.from('profiles').select('id,display_name,role,active,weekly_hours,created_at').order('created_at');
+      const { data, error } = await db.from('profiles').select('id,display_name,role,active,weekly_hours,schedule_access,created_at').order('created_at');
       return error ? fail('Não foi possível carregar a equipa.', 500) : reply({ users: data || [] });
     }
     if (action === 'users:create') {
@@ -678,8 +679,12 @@ Deno.serve(async (req: Request) => {
       const pin = String(body.pin || '');
       const role = actor.role === 'owner' && body.role === 'manager' ? 'manager' : 'staff';
       if (!name || name.length > 80 || !/^[0-9]{4,8}$/.test(pin)) return fail('Indica um nome e um PIN de 4 a 8 algarismos.');
+      const scheduleAccess=typeof body.scheduleAccess==='boolean'?body.scheduleAccess:true;
       const { data, error } = await db.rpc('create_pin_profile', { p_name: name, p_role: role, p_pin: pin });
-      return error ? fail('Não foi possível criar a conta.', 400) : reply({ user: data });
+      if(error)return fail('Não foi possível criar a conta.',400);
+      const created=Array.isArray(data)?data[0]:data;
+      if(!scheduleAccess&&created?.id){const {error:permissionError}=await db.from('profiles').update({schedule_access:false}).eq('id',created.id);if(permissionError){await db.from('profiles').update({active:false}).eq('id',created.id);return fail('A conta foi desativada porque não foi possível aplicar as permissões escolhidas.',500)}}
+      return reply({ user: created });
     }
     const userId = String(body.userId || '');
     const { data: target, error: targetError } = await db.from('profiles').select('id,role,active').eq('id', userId).maybeSingle();
@@ -695,6 +700,7 @@ Deno.serve(async (req: Request) => {
       const patch: Record<string, unknown> = {};
       if (typeof body.name === 'string' && body.name.trim()) patch.display_name = body.name.trim().slice(0, 80);
       if (typeof body.active === 'boolean') patch.active = body.active;
+      if (typeof body.scheduleAccess === 'boolean') patch.schedule_access = body.scheduleAccess;
       if (actor.role === 'owner' && (body.role === 'manager' || body.role === 'staff')) patch.role = body.role;
       const { error } = Object.keys(patch).length ? await db.from('profiles').update(patch).eq('id', userId) : { error: null };
       if (typeof body.pin === 'string' && body.pin) {
