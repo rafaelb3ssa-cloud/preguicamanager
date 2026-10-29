@@ -133,7 +133,7 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
-  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu']);
+  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if(action==='onboarding:status'){
@@ -151,6 +151,19 @@ Deno.serve(async (req: Request) => {
     const {data,error}=await db.from('product_recipes').select('id,name,category,ingredients,method').eq('active',true).order('category').order('name');
     if(error)return fail('Não foi possível carregar os artigos da carta.',500);
     return reply({recipes:(data||[]).map(r=>({id:r.id,name:r.name,category:r.category||'Outros',ingredients:Array.isArray(r.ingredients)?r.ingredients.join('; '):String(r.ingredients||''),training_note:/receita.{0,20}(confirmar|por confirmar)|confirmar.{0,20}receita|componente.{0,30}(por definir|a definir)|receita indicativa/i.test(String(r.method||''))?'Confirmar esta receita com a Gerência antes de a preparar.':''}))});
+  }
+  if(action==='onboarding:modules:list'){
+    const {data,error}=await db.from('staff_onboarding_modules').select('module_key,title,body,sort_order').order('sort_order');
+    return error?fail('Não foi possível carregar os módulos de integração.',500):reply({modules:data||[]});
+  }
+  if(action==='onboarding:modules:save'){
+    if(!canManage(actor))return fail('Só a Gerência pode editar os textos de integração.',403);
+    const modules=Array.isArray(body.modules)?body.modules:[];
+    if(!modules.length||modules.length>10)return fail('Lista de módulos inválida.');
+    const rows=[];
+    for(const m of modules){const key=String(m.key||''),title=String(m.title||'').trim(),content=String(m.body||'');if(!/^module-0[1-9]$/.test(key)||!title||title.length>160||content.length>12000)return fail('Revê os títulos e textos (máximo de 12 000 caracteres por módulo).');rows.push({module_key:key,title,body:content,updated_by:actor.id,updated_at:new Date().toISOString()});}
+    const {error}=await db.from('staff_onboarding_modules').upsert(rows,{onConflict:'module_key'});
+    return error?fail('Não foi possível guardar os textos dos módulos.',400):reply({ok:true});
   }
 
   if (action === 'stock:list') {
