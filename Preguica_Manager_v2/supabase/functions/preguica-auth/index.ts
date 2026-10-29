@@ -173,6 +173,53 @@ Deno.serve(async (req: Request) => {
     return error?fail('Não foi possível guardar a encomenda diária.',400):reply({ok:true});
   }
 
+  if (action === 'stock:minimum') {
+    if (!canManage(actor)) return fail('Só a Gerência pode alterar quantidades mínimas.', 403);
+    const itemId=String(body.itemId||''),minimum=Number(body.minimum);
+    if(!/^[0-9a-f-]{36}$/i.test(itemId)||!Number.isFinite(minimum)||minimum<0)return fail('Quantidade mínima inválida.');
+    const {error}=await db.from('stock_items').update({minimum_quantity:minimum,updated_by:actor.id,updated_at:new Date().toISOString()}).eq('id',itemId).eq('active',true);
+    return error?fail('Não foi possível guardar o mínimo.',400):reply({ok:true});
+  }
+
+  if (action.startsWith('inventory:monthly:')) {
+    if (!canManage(actor)) return fail('O inventário mensal está disponível apenas à Gerência.',403);
+    const month=String(body.month||'');
+    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return fail('Seleciona um mês válido.');
+    const inventoryMonth=`${month}-01`;
+    if(action==='inventory:monthly:get'){
+      const {data,error}=await db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').eq('inventory_month',inventoryMonth).maybeSingle();
+      if(error)return fail('Não foi possível carregar o inventário mensal.',500);
+      const today=lisbonToday(),canStart=today.slice(0,7)===month&&Number(today.slice(8,10))<=14;
+      return reply({count:data||null,canStart});
+    }
+    if(action==='inventory:monthly:start'){
+      const today=lisbonToday();
+      if(today.slice(0,7)!==month||Number(today.slice(8,10))>14)return fail('A contagem mensal só pode ser iniciada entre os dias 1 e 14 do mês selecionado.');
+      const {data:existing,error:readError}=await db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').eq('inventory_month',inventoryMonth).maybeSingle();
+      if(readError)return fail('Não foi possível verificar a contagem mensal.',500);
+      if(existing)return reply({count:existing,alreadyStarted:true});
+      const {data:products,error:stockError}=await db.from('stock_items').select('id,name,category,unit,unit_cost_ex_vat').eq('active',true).order('category').order('name');
+      if(stockError)return fail('Não foi possível preparar os artigos do inventário.',500);
+      const items=(products||[]).map(x=>({stock_item_id:x.id,name:x.name,category:x.category||'Outros',unit:x.unit,counted_quantity:null,unit_cost_ex_vat:x.unit_cost_ex_vat==null?null:Number(x.unit_cost_ex_vat)}));
+      const {data,error}=await db.from('monthly_inventory_counts').insert({inventory_month:inventoryMonth,items,created_by:actor.id,updated_by:actor.id}).select('id,inventory_month,items,created_at,updated_at').single();
+      if(error){if(error.code==='23505'){const again=await db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').eq('inventory_month',inventoryMonth).maybeSingle();if(again.data)return reply({count:again.data,alreadyStarted:true})}return fail('Não foi possível iniciar a contagem mensal.',400)}
+      return reply({count:data});
+    }
+    if(action==='inventory:monthly:save'){
+      const {data:count,error:readError}=await db.from('monthly_inventory_counts').select('id,items').eq('inventory_month',inventoryMonth).maybeSingle();
+      if(readError)return fail('Não foi possível carregar a contagem antes de guardar.',500);
+      if(!count)return fail('Inicia primeiro a contagem mensal.');
+      const incoming=Array.isArray(body.items)?body.items:[];
+      if(incoming.length>500)return fail('A lista de artigos excede o limite.');
+      const values=new Map<string,number|null>();
+      for(const value of incoming){const row=value&&typeof value==='object'?value as Record<string,unknown>:{};const id=String(row.stockItemId||'');const raw=row.countedQuantity;if(!/^[0-9a-f-]{36}$/i.test(id)||(raw!==null&&(!Number.isFinite(Number(raw))||Number(raw)<0)))return fail('Há uma quantidade de inventário inválida.');values.set(id,raw===null?null:Number(raw))}
+      const snapshot=Array.isArray(count.items)?count.items as Array<Record<string,unknown>>:[];
+      const items=snapshot.map(x=>({...x,counted_quantity:values.has(String(x.stock_item_id))?values.get(String(x.stock_item_id)):x.counted_quantity??null}));
+      const {data,error}=await db.from('monthly_inventory_counts').update({items,updated_by:actor.id,updated_at:new Date().toISOString()}).eq('id',count.id).select('id,inventory_month,items,created_at,updated_at').single();
+      return error?fail('Não foi possível guardar a contagem mensal.',400):reply({count:data});
+    }
+  }
+
   if (action === 'stock:configure') {
     if (!canManage(actor)) return fail('Só a gerência pode criar ou configurar artigos.', 403);
     const item = body.item && typeof body.item === 'object' ? body.item as Record<string, unknown> : {};
