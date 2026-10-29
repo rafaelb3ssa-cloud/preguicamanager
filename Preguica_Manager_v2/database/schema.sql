@@ -3,7 +3,7 @@
 create extension if not exists pgcrypto;
 
 create type public.app_role as enum ('owner','manager','staff');
-create type public.attendance_kind as enum ('clock_in','clock_out','late','absence','medical_leave','early_departure','other');
+create type public.attendance_kind as enum ('clock_in','clock_out','late','absence','medical_leave','early_departure','other','vacation');
 create type public.attendance_status as enum ('pending','validated','corrected','rejected');
 create type public.request_status as enum ('pending','approved','rejected');
 create type public.haccp_record_kind as enum ('temperature','cleaning','receiving','expiry_check','corrective_action');
@@ -84,6 +84,7 @@ create table public.attendance_records (
   shift_id uuid references public.shifts(id),
   kind public.attendance_kind not null,
   occurred_at timestamptz not null,
+  original_occurred_at timestamptz,
   note text,
   status public.attendance_status not null default 'pending',
   submitted_by uuid not null references public.profiles(id),

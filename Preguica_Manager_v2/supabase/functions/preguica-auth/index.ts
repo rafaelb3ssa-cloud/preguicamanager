@@ -133,7 +133,7 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
-  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','schedule:list','recipes:list','activity:pending','activity:logs:list','activity:save-draft','activity:submit']);
+  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','schedule:list','recipes:list','activity:pending','activity:logs:list','activity:save-draft','activity:submit']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if (action === 'stock:list') {
@@ -179,8 +179,8 @@ Deno.serve(async (req: Request) => {
   if (action === 'suppliers:save') {
     if (!canManage(actor)) return fail('Só a gerência pode editar fornecedores.', 403);
     const s = body.supplier && typeof body.supplier === 'object' ? body.supplier as Record<string, unknown> : {};
-    const name = String(s.name || '').trim(), orderDay = Number(s.order_weekday), deliveryDay = Number(s.delivery_weekday);
-    if (!name || name.length > 120 || !Number.isInteger(orderDay) || orderDay < 1 || orderDay > 7 || !Number.isInteger(deliveryDay) || deliveryDay < 1 || deliveryDay > 7) return fail('Confirma os dados do fornecedor.');
+    const name = String(s.name || '').trim(), orderDay = Number(s.order_weekday), deliveryDay = s.delivery_weekday===null||s.delivery_weekday===''?null:Number(s.delivery_weekday);
+    if (!name || name.length > 120 || !Number.isInteger(orderDay) || orderDay < 1 || orderDay > 7 || (deliveryDay!==null&&(!Number.isInteger(deliveryDay)||deliveryDay<1||deliveryDay>7))) return fail('Confirma os dados do fornecedor.');
     const { error } = await db.from('suppliers').upsert({ name, phone: String(s.phone || '').trim().slice(0,40) || null, order_weekday: orderDay, delivery_weekday: deliveryDay, updated_at: new Date().toISOString() }, { onConflict: 'name' });
     return error ? fail('Não foi possível guardar o fornecedor.', 400) : reply({ ok: true });
   }
@@ -208,15 +208,21 @@ Deno.serve(async (req: Request) => {
     const month = String(body.month || new Date().toISOString().slice(0,7));
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return fail('Indica um mês válido.');
     const [year,mon]=month.split('-').map(Number), start=`${month}-01`, end=new Date(Date.UTC(year,mon,1)).toISOString();
-    let q=db.from('attendance_records').select('id,staff_id,kind,occurred_at,note,status,created_at').gte('occurred_at',`${start}T00:00:00Z`).lt('occurred_at',end).order('occurred_at',{ascending:false});
+    let q=db.from('attendance_records').select('id,staff_id,kind,occurred_at,original_occurred_at,note,status,correction_reason,created_at').gte('occurred_at',`${start}T00:00:00Z`).lt('occurred_at',end).order('occurred_at',{ascending:false});
     if(actor.role==='staff') q=q.eq('staff_id',actor.id);
     const {data,error}=await q; if(error)return fail('Não foi possível carregar assiduidade.',500);
-    const ids=[...new Set((data||[]).map(x=>x.staff_id))], {data:profiles}=ids.length?await db.from('profiles').select('id,display_name').in('id',ids):{data:[]};
-    return reply({records:(data||[]).map(x=>({...x,display_name:(profiles||[]).find(p=>p.id===x.staff_id)?.display_name||'—'}))});
+    const ids=[...new Set((data||[]).map(x=>x.staff_id))], {data:profiles}=actor.role==='staff'?await db.from('profiles').select('id,display_name,weekly_hours').eq('id',actor.id):await db.from('profiles').select('id,display_name,weekly_hours').eq('active',true).eq('role','staff').order('display_name');
+    const staffProfiles=profiles||[],name=(id:string)=>staffProfiles.find(p=>p.id===id)?.display_name||'—';
+    const approved=(data||[]).filter(x=>['validated','corrected'].includes(x.status)&&['clock_in','clock_out'].includes(x.kind)).slice().sort((a,b)=>a.occurred_at.localeCompare(b.occurred_at));
+    const opened=new Map<string,string>(),totals:Record<string,number>={};
+    for(const row of approved){if(row.kind==='clock_in'){opened.set(row.staff_id,row.occurred_at);continue;}const began=opened.get(row.staff_id);if(!began)continue;opened.delete(row.staff_id);const mins=(Date.parse(row.occurred_at)-Date.parse(began))/60000;if(mins>0&&mins<24*60){const monday=mondayOf(dateInTimezone(began));const key=`${row.staff_id}|${monday}`;totals[key]=(totals[key]||0)+mins/60;}}
+    const monthLast=new Date(Date.UTC(year,mon,0)).toISOString().slice(0,10),weeks:string[]=[];for(let w=mondayOf(start);w<=monthLast;w=shiftIsoDate(w,7))weeks.push(w);
+    const weeklySummary=staffProfiles.flatMap(p=>weeks.map(week=>{const hours=totals[`${p.id}|${week}`]||0,base=Number(p.weekly_hours||40),weekDone=shiftIsoDate(week,7)<=lisbonToday();return{staff_id:p.id,display_name:p.display_name,week_start:week,approved_hours:Math.round(hours*100)/100,weekly_hours:base,difference:Math.round((hours-base)*100)/100,week_complete:weekDone,has_punches:hours>0};}));
+    return reply({records:(data||[]).map(x=>({...x,display_name:name(x.staff_id)})),weeklySummary});
   }
   if (action === 'attendance:record') {
     const kind=String(body.kind||''), at=String(body.occurredAt||'');
-    if(!['clock_in','clock_out','late','early_departure','absence','medical_leave','other'].includes(kind)||Number.isNaN(Date.parse(at))||Date.parse(at)>Date.now())return fail('Indica tipo, data e hora válidos.');
+    if(!['clock_in','clock_out','late','early_departure','absence','medical_leave','vacation'].includes(kind)||Number.isNaN(Date.parse(at))||Date.parse(at)>Date.now())return fail('Indica tipo, data e hora válidos.');
     const {error}=await db.from('attendance_records').insert({staff_id:actor.id,submitted_by:actor.id,kind,occurred_at:new Date(at).toISOString(),note:String(body.note||'').slice(0,1000),status:'pending'});
     return error?fail('Não foi possível guardar a assiduidade.',400):reply({ok:true});
   }
@@ -224,7 +230,7 @@ Deno.serve(async (req: Request) => {
     if(!canManage(actor))return fail('Só a gerência pode validar registos.',403);
     const id=String(body.id||''), status=String(body.status||'');
     if(!/^[0-9a-f-]{36}$/i.test(id)||!['validated','rejected','corrected'].includes(status))return fail('Indica uma validação válida.');
-    const {error}=await db.from('attendance_records').update({status,reviewed_by:actor.id,reviewed_at:new Date().toISOString(),correction_reason:String(body.reason||'').slice(0,1000)}).eq('id',id);
+    const patch:any={status,reviewed_by:actor.id,reviewed_at:new Date().toISOString(),correction_reason:String(body.reason||'').slice(0,1000)};if(body.occurredAt){const corrected=String(body.occurredAt);if(Number.isNaN(Date.parse(corrected))||Date.parse(corrected)>Date.now())return fail('Indica uma hora corrigida válida.');const {data:original,error:readError}=await db.from('attendance_records').select('occurred_at,original_occurred_at').eq('id',id).maybeSingle();if(readError||!original)return fail('Não foi possível carregar o registo original.',400);patch.original_occurred_at=original.original_occurred_at||original.occurred_at;patch.occurred_at=new Date(corrected).toISOString();}if(status==='corrected'&&(!patch.correction_reason||!patch.occurred_at))return fail('A correção exige hora e motivo.');const {error}=await db.from('attendance_records').update(patch).eq('id',id);
     return error?fail('Não foi possível validar o registo.',400):reply({ok:true});
   }
 
@@ -233,19 +239,20 @@ Deno.serve(async (req: Request) => {
     const {data:schedules,error}=await db.from('weekly_schedules').select('id,week_start,version,status,published_at,accumulated_hours').eq('week_start',week).in('status',actor.role==='staff'?['published']:['draft','published']).order('version',{ascending:false}).limit(1);
     if(error)return fail('Não foi possível carregar o horário.',500); const schedule=schedules?.[0];
     const [profiles,shifts]=await Promise.all([db.from('profiles').select('id,display_name,weekly_hours').eq('active',true).eq('role','staff').order('display_name'),schedule?db.from('shifts').select('id,staff_id,shift_date,starts_at,ends_at,break_minutes,notes').eq('schedule_id',schedule.id).order('shift_date'):Promise.resolve({data:[],error:null})]);
-    const monthStart=`${week.slice(0,7)}-01`;
-    const {data:priorSchedules,error:priorError}=await db.from('weekly_schedules').select('id,week_start,version').eq('status','published').gte('week_start',monthStart).lt('week_start',week).order('version',{ascending:false});
-    if(priorError)return fail('Não foi possível calcular as horas acumuladas.',500);
-    const latestPrior=new Map<string,string>(); for(const item of priorSchedules||[])if(!latestPrior.has(item.week_start))latestPrior.set(item.week_start,item.id);
-    const priorIds=[...latestPrior.values()];
-    const {data:priorShifts,error:priorShiftsError}=priorIds.length?await db.from('shifts').select('staff_id,starts_at,ends_at,break_minutes').in('schedule_id',priorIds):{data:[],error:null};
-    if(priorShiftsError)return fail('Não foi possível calcular as horas acumuladas.',500);
-    const accumulated:Record<string,number>={};
-    const addHours=(row:{staff_id:string;starts_at:string;ends_at:string;break_minutes:number|null})=>{const [sh,sm]=String(row.starts_at).slice(0,5).split(':').map(Number),[eh,em]=String(row.ends_at).slice(0,5).split(':').map(Number);let minutes=eh*60+em-sh*60-sm;if(minutes<0)minutes+=1440;accumulated[row.staff_id]=(accumulated[row.staff_id]||0)+Math.max(0,minutes-(row.break_minutes||0))/60};
-    for(const row of priorShifts||[])addHours(row);
-    for(const row of shifts.data||[])addHours(row);
-    const savedBalances=schedule?.accumulated_hours&&typeof schedule.accumulated_hours==='object'?schedule.accumulated_hours as Record<string,unknown>:{};
-    for(const profile of profiles.data||[]){const balance=savedBalances[profile.id];if(typeof balance==='number'&&Number.isFinite(balance))accumulated[profile.id]=balance;}
+    const {data:allSchedules,error:allError}=await db.from('weekly_schedules').select('id,week_start,version,accumulated_hours').eq('status','published').lte('week_start',week).order('week_start',{ascending:true}).order('version',{ascending:false});
+    if(allError)return fail('Não foi possível calcular as horas acumuladas.',500);
+    const byWeek=new Map<string,any>();for(const item of allSchedules||[])if(!byWeek.has(item.week_start))byWeek.set(item.week_start,item);
+    if(schedule)byWeek.set(week,schedule);
+    const ordered=[...byWeek.values()].sort((a,b)=>a.week_start.localeCompare(b.week_start));
+    const allIds=ordered.map(x=>x.id);const {data:allShifts,error:allShiftError}=allIds.length?await db.from('shifts').select('schedule_id,staff_id,shift_date,starts_at,ends_at,break_minutes').in('schedule_id',allIds):{data:[],error:null};
+    if(allShiftError)return fail('Não foi possível calcular as horas acumuladas.',500);
+    const hoursBySchedule:Record<string,Record<string,number>>={},plannedByDay:Record<string,number>={};
+    for(const row of allShifts||[]){const [sh,sm]=String(row.starts_at).slice(0,5).split(':').map(Number),[eh,em]=String(row.ends_at).slice(0,5).split(':').map(Number);let mins=eh*60+em-sh*60-sm;if(mins<0)mins+=1440;const hours=Math.max(0,mins-(row.break_minutes||0))/60,day=String((row as any).shift_date||'').slice(0,10);hoursBySchedule[row.schedule_id]??={};hoursBySchedule[row.schedule_id][row.staff_id]=(hoursBySchedule[row.schedule_id][row.staff_id]||0)+hours;if(day)plannedByDay[`${row.schedule_id}|${row.staff_id}|${day}`]=(plannedByDay[`${row.schedule_id}|${row.staff_id}|${day}`]||0)+hours;}
+    const firstDay=ordered[0]?.week_start||week,attendanceEnd=shiftIsoDate(week,8);
+    const punches=await pagedRows<{staff_id:string;kind:string;occurred_at:string;status:string}>((from,to)=>db.from('attendance_records').select('staff_id,kind,occurred_at,status').in('kind',['clock_in','clock_out']).in('status',['validated','corrected']).gte('occurred_at',`${shiftIsoDate(firstDay,-1)}T00:00:00Z`).lt('occurred_at',`${attendanceEnd}T00:00:00Z`).order('occurred_at').range(from,to));
+    const actualByDay:Record<string,number>={},opened=new Map<string,string>();for(const punch of punches){if(punch.kind==='clock_in'){opened.set(punch.staff_id,punch.occurred_at);continue;}const began=opened.get(punch.staff_id);if(!began)continue;opened.delete(punch.staff_id);const minutes=(Date.parse(punch.occurred_at)-Date.parse(began))/60000;if(minutes>0&&minutes<1440){const day=dateInTimezone(began),key=`${punch.staff_id}|${day}`;actualByDay[key]=(actualByDay[key]||0)+minutes/60;}}
+    const accumulated:Record<string,number>={};const saved=(item:any)=>item?.accumulated_hours&&typeof item.accumulated_hours==='object'?item.accumulated_hours as Record<string,unknown>:{};
+    for(const profile of profiles.data||[]){let baseline=-1;for(let i=ordered.length-1;i>=0;i--)if(typeof saved(ordered[i])[profile.id]==='number'){baseline=i;break;}let balance=baseline>=0?Number(saved(ordered[baseline])[profile.id]):0;for(let i=Math.max(0,baseline);i<ordered.length;i++){const item=ordered[i];let worked=0;for(const [key,planned] of Object.entries(plannedByDay)){const [scheduleId,staffId,day]=key.split('|');if(scheduleId!==item.id||staffId!==profile.id)continue;worked+=actualByDay[`${profile.id}|${day}`]??planned;}for(const [key,hours] of Object.entries(actualByDay)){const [staffId,day]=key.split('|');if(staffId===profile.id&&mondayOf(day)===item.week_start&&!plannedByDay[`${item.id}|${profile.id}|${day}`])worked+=hours;}balance+=worked-Number(profile.weekly_hours||40);}accumulated[profile.id]=Math.round(balance*100)/100;}
     return reply({schedule:schedule||null,profiles:profiles.data||[],shifts:shifts.data||[],accumulated});
   }
   if (action === 'schedule:save') {
@@ -253,7 +260,7 @@ Deno.serve(async (req: Request) => {
     const week=String(body.weekStart||''), items=Array.isArray(body.shifts)?body.shifts:[]; if(!validDate(week)||items.length>80)return fail('Horário inválido.');
     const existing=await db.from('weekly_schedules').select('id,version').eq('week_start',week).eq('status','draft').order('version',{ascending:false}).limit(1).maybeSingle();
     let schedule=existing.data;
-    if(!schedule){const prior=await db.from('weekly_schedules').select('version').eq('week_start',week).order('version',{ascending:false}).limit(1).maybeSingle();const made=await db.from('weekly_schedules').insert({week_start:week,version:(prior.data?.version||0)+1,status:'draft'}).select('id,version').single();if(made.error)return fail('Não foi possível criar o rascunho.',400);schedule=made.data;}
+    if(!schedule){const prior=await db.from('weekly_schedules').select('version,accumulated_hours').eq('week_start',week).order('version',{ascending:false}).limit(1).maybeSingle();const made=await db.from('weekly_schedules').insert({week_start:week,version:(prior.data?.version||0)+1,status:'draft',accumulated_hours:prior.data?.accumulated_hours||{}}).select('id,version').single();if(made.error)return fail('Não foi possível criar o rascunho.',400);schedule=made.data;}
     const clean=[]; for(const s of items){if(!validDate(String(s.date||''))||String(s.date)<week||String(s.date)>=new Date(Date.parse(week+'T00:00:00Z')+7*86400000).toISOString().slice(0,10)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(s.start||''))||!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(s.end||''))||!/^[0-9a-f-]{36}$/i.test(String(s.staffId||'')))return fail('Há um turno inválido.');clean.push({schedule_id:schedule.id,staff_id:s.staffId,shift_date:s.date,starts_at:s.start,ends_at:s.end,break_minutes:Math.max(0,Number(s.breakMinutes)||0),notes:String(s.notes||'').slice(0,300)});}
     const staffIds=[...new Set(clean.map(x=>x.staff_id))]; if(staffIds.length){const {data:validStaff,error:staffError}=await db.from('profiles').select('id').in('id',staffIds).eq('active',true).eq('role','staff');if(staffError||validStaff?.length!==staffIds.length)return fail('O horário pode incluir apenas colaboradoras ativas.',403)}
     await db.from('shifts').delete().eq('schedule_id',schedule.id); if(clean.length){const {error}=await db.from('shifts').insert(clean);if(error)return fail('Não foi possível guardar os turnos.',400)} return reply({ok:true,scheduleId:schedule.id});
