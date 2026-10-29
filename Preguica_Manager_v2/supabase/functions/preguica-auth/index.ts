@@ -134,7 +134,16 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
-  const staffActions=new Set(['stock:list','stock:quantity','stock:minimum','stock:rename','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','recipes:list']);
+  if (action === 'pin:change') {
+    const currentPin=String(body.currentPin||''),newPin=String(body.newPin||'');
+    if(!/^[0-9]{4,8}$/.test(currentPin)||!/^[0-9]{4,8}$/.test(newPin))return fail('O PIN atual e o novo PIN devem ter entre 4 e 8 algarismos.');
+    if(currentPin===newPin)return fail('Escolhe um PIN diferente do atual.');
+    const {data:valid,error:verifyError}=await db.rpc('verify_app_pin',{p_profile_id:actor.id,p_pin:currentPin});
+    if(verifyError||valid!==true)return fail('O PIN atual está incorreto.',401);
+    const {error}=await db.rpc('change_profile_pin',{p_profile_id:actor.id,p_pin:newPin});
+    return error?fail('Não foi possível alterar o PIN.',400):reply({ok:true});
+  }
+  const staffActions=new Set(['pin:change','suppliers:list','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','recipes:list']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if(action==='onboarding:status'){
@@ -300,14 +309,9 @@ Deno.serve(async (req: Request) => {
     let q=db.from('attendance_records').select('id,staff_id,shift_id,kind,occurred_at,original_occurred_at,note,status,correction_reason,created_at').gte('occurred_at',`${start}T00:00:00Z`).lt('occurred_at',end).order('occurred_at',{ascending:false});
     if(actor.role==='staff') q=q.eq('staff_id',actor.id);
     const {data,error}=await q; if(error)return fail('Não foi possível carregar assiduidade.',500);
-    const {data:profiles}=actor.role==='staff'?await db.from('profiles').select('id,display_name,weekly_hours').eq('id',actor.id):await db.from('profiles').select('id,display_name,weekly_hours').eq('active',true).eq('role','staff').order('display_name');
+    const {data:profiles}=actor.role==='staff'?await db.from('profiles').select('id,display_name').eq('id',actor.id):await db.from('profiles').select('id,display_name').eq('active',true).eq('role','staff').order('display_name');
     const staffProfiles=profiles||[],name=(id:string)=>staffProfiles.find(p=>p.id===id)?.display_name||'—';const linkedIds=[...new Set((data||[]).map(x=>x.shift_id).filter(Boolean))],{data:linkedShifts}=linkedIds.length?await db.from('shifts').select('id,shift_date').in('id',linkedIds):{data:[],error:null};const shiftDate=new Map((linkedShifts||[]).map(x=>[x.id,x.shift_date]));
-    const approved=(data||[]).filter(x=>['validated','corrected'].includes(x.status)&&['clock_in','clock_out'].includes(x.kind)).slice().sort((a,b)=>a.occurred_at.localeCompare(b.occurred_at));
-    const opened=new Map<string,string>(),totals:Record<string,number>={};
-    for(const row of approved){if(row.kind==='clock_in'){opened.set(row.staff_id,row.occurred_at);continue;}const began=opened.get(row.staff_id);if(!began)continue;opened.delete(row.staff_id);const mins=(Date.parse(row.occurred_at)-Date.parse(began))/60000;if(mins>0&&mins<24*60){const monday=mondayOf(dateInTimezone(began));const key=`${row.staff_id}|${monday}`;totals[key]=(totals[key]||0)+mins/60;}}
-    const monthLast=new Date(Date.UTC(year,mon,0)).toISOString().slice(0,10),weeks:string[]=[];for(let w=mondayOf(start);w<=monthLast;w=shiftIsoDate(w,7))weeks.push(w);
-    const weeklySummary=staffProfiles.flatMap(p=>weeks.map(week=>{const hours=totals[`${p.id}|${week}`]||0,base=Number(p.weekly_hours||40),weekDone=shiftIsoDate(week,7)<=lisbonToday();return{staff_id:p.id,display_name:p.display_name,week_start:week,approved_hours:Math.round(hours*100)/100,weekly_hours:base,difference:Math.round((hours-base)*100)/100,week_complete:weekDone,has_punches:hours>0};}));
-    return reply({records:(data||[]).map(x=>({...x,display_name:name(x.staff_id),shift_date:shiftDate.get(x.shift_id)||null})),weeklySummary});
+    return reply({records:(data||[]).map(x=>({...x,display_name:name(x.staff_id),shift_date:shiftDate.get(x.shift_id)||null}))});
   }
   if (action === 'attendance:record') {
     if(actor.role!=='staff')return fail('A assiduidade é registada pela própria colaboradora. A Gerência valida e corrige no histórico.',403);
@@ -317,28 +321,36 @@ Deno.serve(async (req: Request) => {
     if(shiftId){
       if(!/^[0-9a-f-]{36}$/i.test(shiftId))return fail('Turno inválido.');
       const {data:shift,error:shiftError}=await db.from('shifts').select('id,schedule_id,staff_id,shift_date,starts_at,ends_at').eq('id',shiftId).eq('staff_id',actor.id).maybeSingle();if(shiftError||!shift)return fail('Só podes registar ocorrências nos teus próprios turnos.',403);
-      const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('id',shift.schedule_id).eq('status','published').maybeSingle();if(scheduleError||!schedule)return fail('Este turno ainda não foi publicado.',403);
-      const startOfShift=Date.parse(`${shift.shift_date}T00:00:00Z`),dayOfEvent=new Date(`${dateInTimezone(at)}T00:00:00Z`).getTime();if(dayOfEvent<startOfShift||dayOfEvent>startOfShift+86400000)return fail('A ocorrência tem de pertencer ao dia do turno ou à manhã seguinte.');if(kind==='clock_in'){const actualLocal=`${dateInTimezone(at)}T${timeInTimezone(at)}`,scheduledStart=`${shift.shift_date}T${String(shift.starts_at).slice(0,5)}`;if(actualLocal<scheduledStart)return fail(`A entrada só pode ser registada a partir das ${String(shift.starts_at).slice(0,5)}.`,403)}if(kind==='clock_out'&&!note){const start=String(shift.starts_at).slice(0,5),end=String(shift.ends_at).slice(0,5),endDate=end<=start?shiftIsoDate(shift.shift_date,1):shift.shift_date,actualLocal=`${dateInTimezone(at)}T${timeInTimezone(at)}`,scheduledEnd=`${endDate}T${end}`;if(actualLocal<scheduledEnd)note=`Saída antecipada · fim previsto às ${end}`;else if(actualLocal>scheduledEnd)note=`Tempo extra · fim previsto às ${end}`}
+      const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('id',shift.schedule_id).eq('status','published').maybeSingle();if(scheduleError||!schedule)return fail('Este turno ainda não foi publicado.',403);if(dateInTimezone(at)<shift.shift_date)return fail('Só podes registar este turno no dia previsto ou depois.',403);
+      if(kind==='clock_out'&&!note){const start=String(shift.starts_at).slice(0,5),end=String(shift.ends_at).slice(0,5),endDate=end<=start?shiftIsoDate(shift.shift_date,1):shift.shift_date,actualLocal=`${dateInTimezone(at)}T${timeInTimezone(at)}`,scheduledEnd=`${endDate}T${end}`;if(actualLocal<scheduledEnd)note=`Saída antecipada · fim previsto às ${end}`;else if(actualLocal>scheduledEnd)note=`Tempo extra · fim previsto às ${end}`}
       const {data:prior,error:priorError}=await db.from('attendance_records').select('id,kind,status').eq('shift_id',shiftId).eq('staff_id',actor.id).neq('status','rejected');if(priorError)return fail('Não foi possível validar os registos deste turno.',500);
-      if(['clock_in','absence','medical_leave','vacation'].includes(kind)&&prior?.some(x=>['clock_in','absence','medical_leave','vacation'].includes(x.kind)))return fail('Já existe uma entrada ou ocorrência registada para este turno.');
-      if(kind==='clock_out'&&!prior?.some(x=>x.kind==='clock_in'))return fail('Regista primeiro a entrada deste turno.');
-      if(kind==='clock_out'&&prior?.some(x=>x.kind==='clock_out'))return fail('A saída deste turno já foi registada.');
+      if(['clock_in','absence','medical_leave','vacation'].includes(kind)&&prior?.some(x=>!['rejected','cancelled'].includes(x.status)&&['clock_in','absence','medical_leave','vacation'].includes(x.kind)))return fail('Já existe uma entrada ou ocorrência registada para este turno.');
+      if(kind==='clock_out'&&!prior?.some(x=>x.kind==='clock_in'&&!['rejected','cancelled'].includes(x.status)))return fail('Regista primeiro a entrada deste turno.');
+      if(kind==='clock_out'&&prior?.some(x=>x.kind==='clock_out'&&!['rejected','cancelled'].includes(x.status)))return fail('A saída deste turno já foi registada.');
       linkedShiftId=shift.id;
     }
     const {error}=await db.from('attendance_records').insert({staff_id:actor.id,shift_id:linkedShiftId,submitted_by:actor.id,kind,occurred_at:new Date(at).toISOString(),note:note.slice(0,1000),status:'pending'});
     return error?fail('Não foi possível guardar a assiduidade.',400):reply({ok:true});
   }
+  if (action === 'attendance:cancel') {
+    if(actor.role!=='staff')return fail('A colaboradora só pode cancelar os próprios registos.',403);
+    const id=String(body.id||'');if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Registo inválido.');
+    const {data,error}=await db.from('attendance_records').update({status:'cancelled',correction_reason:'Cancelado pela colaboradora',reviewed_at:new Date().toISOString()}).eq('id',id).eq('staff_id',actor.id).eq('status','pending').select('id').maybeSingle();
+    if(error)return fail('Não foi possível cancelar o registo.',400);
+    if(!data)return fail('Só podes cancelar os teus registos enquanto aguardam aprovação.',403);
+    return reply({ok:true});
+  }
   if (action === 'attendance:note') {
     if(!canManage(actor))return fail('Só a Gerência pode editar notas de assiduidade.',403);
     const id=String(body.id||''),note=String(body.note||'').slice(0,1000);if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Registo inválido.');
-    const {error}=await db.from('attendance_records').update({correction_reason:note,reviewed_by:actor.id,reviewed_at:new Date().toISOString()}).eq('id',id);return error?fail('Não foi possível guardar a nota.',400):reply({ok:true});
+    const {data,error}=await db.from('attendance_records').update({correction_reason:note,reviewed_by:actor.id,reviewed_at:new Date().toISOString()}).eq('id',id).eq('status','pending').select('id').maybeSingle();if(error)return fail('Não foi possível guardar a nota.',400);return data?reply({ok:true}):fail('Este registo já não está pendente e não pode ser alterado.',403);
   }
   if (action === 'attendance:review') {
     if(!canManage(actor))return fail('Só a gerência pode validar registos.',403);
     const id=String(body.id||''), status=String(body.status||'');
     if(!/^[0-9a-f-]{36}$/i.test(id)||!['validated','rejected','corrected'].includes(status))return fail('Indica uma validação válida.');
-    const patch:any={status,reviewed_by:actor.id,reviewed_at:new Date().toISOString()};if(body.reason!==undefined)patch.correction_reason=String(body.reason||'').slice(0,1000);if(body.occurredAt){const corrected=String(body.occurredAt);if(Number.isNaN(Date.parse(corrected))||Date.parse(corrected)>Date.now())return fail('Indica uma hora corrigida válida.');const {data:original,error:readError}=await db.from('attendance_records').select('occurred_at,original_occurred_at').eq('id',id).maybeSingle();if(readError||!original)return fail('Não foi possível carregar o registo original.',400);patch.original_occurred_at=original.original_occurred_at||original.occurred_at;patch.occurred_at=new Date(corrected).toISOString();}if(status==='corrected'&&(!patch.correction_reason||!patch.occurred_at))return fail('A correção exige hora e motivo.');const {error}=await db.from('attendance_records').update(patch).eq('id',id);
-    return error?fail('Não foi possível validar o registo.',400):reply({ok:true});
+    const patch:any={status,reviewed_by:actor.id,reviewed_at:new Date().toISOString()};if(body.reason!==undefined)patch.correction_reason=String(body.reason||'').slice(0,1000);if(body.occurredAt){const corrected=String(body.occurredAt);if(Number.isNaN(Date.parse(corrected))||Date.parse(corrected)>Date.now())return fail('Indica uma hora corrigida válida.');const {data:original,error:readError}=await db.from('attendance_records').select('occurred_at,original_occurred_at').eq('id',id).maybeSingle();if(readError||!original)return fail('Não foi possível carregar o registo original.',400);patch.original_occurred_at=original.original_occurred_at||original.occurred_at;patch.occurred_at=new Date(corrected).toISOString();}if(status==='corrected'&&(!patch.correction_reason||!patch.occurred_at))return fail('A correção exige hora e motivo.');const {data,error}=await db.from('attendance_records').update(patch).eq('id',id).eq('status','pending').select('id').maybeSingle();
+    if(error)return fail('Não foi possível validar o registo.',400);if(!data)return fail('Este registo já foi aprovado, corrigido ou cancelado e não pode ser alterado.',403);return reply({ok:true});
   }
 
   if (action === 'schedule:list') {
