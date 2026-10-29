@@ -133,7 +133,7 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
-  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list']);
+  const staffActions=new Set(['stock:list','stock:quantity','stock:minimum','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if(action==='onboarding:status'){
@@ -192,7 +192,7 @@ Deno.serve(async (req: Request) => {
   }
 
   if (action === 'stock:minimum') {
-    if (!canManage(actor)) return fail('Só a Gerência pode alterar quantidades mínimas.', 403);
+    if (actor.role!=='staff'&&!canManage(actor)) return fail('Sem permissão para alterar a quantidade mínima.', 403);
     const itemId=String(body.itemId||''),minimum=Number(body.minimum);
     if(!/^[0-9a-f-]{36}$/i.test(itemId)||!Number.isFinite(minimum)||minimum<0)return fail('Quantidade mínima inválida.');
     const {error}=await db.from('stock_items').update({minimum_quantity:minimum,updated_by:actor.id,updated_at:new Date().toISOString()}).eq('id',itemId).eq('active',true);
