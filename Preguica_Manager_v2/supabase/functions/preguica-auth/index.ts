@@ -133,7 +133,7 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
-  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','activity:pending','activity:logs:list','activity:save-draft','activity:submit']);
+  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','schedule:list','recipes:list','activity:pending','activity:logs:list','activity:save-draft','activity:submit']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if (action === 'stock:list') {
@@ -452,10 +452,12 @@ Deno.serve(async (req: Request) => {
   }
 
   if (action === 'recipes:list') {
-    const { data, error } = await db.from('product_recipes').select('id,name,category,sale_price_inc_vat,ingredient_cost_ex_vat,ingredients,method,active').eq('active', true).order('name');
+    const fields=actor.role==='staff'?'id,name,category,ingredients,method,active':'id,name,category,sale_price_inc_vat,ingredient_cost_ex_vat,ingredients,method,active';
+    const { data, error } = await db.from('product_recipes').select(fields).eq('active', true).order('category').order('name');
     if (error) return fail('Não foi possível carregar as fichas técnicas.', 500);
     const recipes = (data || []).map((r) => ({
-      id: r.id, name: r.name, category: r.category, sale: Number(r.sale_price_inc_vat), cost: Number(r.ingredient_cost_ex_vat),
+      id: r.id, name: r.name, category: r.category,
+      ...(actor.role==='staff'?{}:{sale:Number(r.sale_price_inc_vat),cost:Number(r.ingredient_cost_ex_vat)}),
       ingredients: Array.isArray(r.ingredients) ? r.ingredients.join('; ') : String(r.ingredients || ''), method: r.method || '',
     }));
     return reply({ recipes });
