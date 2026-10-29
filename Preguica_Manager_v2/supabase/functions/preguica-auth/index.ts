@@ -133,19 +133,34 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
-  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','schedule:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge']);
+  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','schedule:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:menu-acknowledge']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if(action==='onboarding:status'){
-    const revision='welcome-preguica-v2';let query=db.from('staff_onboarding_acknowledgements').select('profile_id,revision,acknowledged_at').eq('revision',revision);
+    const revisions=['welcome-preguica-v2','menu-training-v1'];let query=db.from('staff_onboarding_acknowledgements').select('profile_id,revision,acknowledged_at').in('revision',revisions);
     if(actor.role==='staff')query=query.eq('profile_id',actor.id);
     const {data,error}=await query.order('acknowledged_at',{ascending:false});if(error)return fail('Não foi possível carregar o estado de integração.',500);
-    const ids=[...new Set((data||[]).map(x=>x.profile_id))],{data:profiles}=actor.role==='staff'?await db.from('profiles').select('id,display_name').eq('id',actor.id):await db.from('profiles').select('id,display_name').eq('active',true).eq('role','staff').order('display_name');
-    return reply({revision,acknowledgements:(profiles||[]).map(p=>{const ack=(data||[]).find(x=>x.profile_id===p.id);return{profile_id:p.id,display_name:p.display_name,revision,acknowledged_at:ack?.acknowledged_at||null};})});
+    const {data:profiles}=actor.role==='staff'?await db.from('profiles').select('id,display_name').eq('id',actor.id):await db.from('profiles').select('id,display_name').eq('active',true).eq('role','staff').order('display_name');
+    return reply({acknowledgements:(profiles||[]).map(p=>{const rows=(data||[]).filter(x=>x.profile_id===p.id);return{profile_id:p.id,display_name:p.display_name,acknowledged_at:rows.find(x=>x.revision==='welcome-preguica-v2')?.acknowledged_at||null,menu_acknowledged_at:rows.find(x=>x.revision==='menu-training-v1')?.acknowledged_at||null};})});
   }
   if(action==='onboarding:acknowledge'){
     const revision='welcome-preguica-v2';const {error}=await db.from('staff_onboarding_acknowledgements').upsert({profile_id:actor.id,revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,revision'});
     return error?fail('Não foi possível guardar a confirmação.',400):reply({ok:true,revision});
+  }
+  if(action==='onboarding:menu'){
+    const {data,error}=await db.from('product_recipes').select('id,name,category,ingredients,method').eq('active',true).order('category').order('name');
+    if(error)return fail('Não foi possível carregar os artigos da carta.',500);
+    return reply({recipes:(data||[]).map(r=>({id:r.id,name:r.name,category:r.category||'Outros',ingredients:Array.isArray(r.ingredients)?r.ingredients.join('; '):String(r.ingredients||''),training_note:/receita.{0,20}(confirmar|por confirmar)|confirmar.{0,20}receita|componente.{0,30}(por definir|a definir)|receita indicativa/i.test(String(r.method||''))?'Confirmar esta receita com a Gerência antes de a preparar.':''}))});
+  }
+  if(action==='onboarding:menu-acknowledge'){
+    const submitted=Array.isArray(body.recipeIds)?[...new Set(body.recipeIds.map((x:unknown)=>String(x)))]:[];
+    if(!submitted.length||submitted.some((id:string)=>!/^[0-9a-f-]{36}$/i.test(id)))return fail('Consulta todas as fichas técnicas antes de concluir.');
+    const {data:activeRecipes,error:recipesError}=await db.from('product_recipes').select('id').eq('active',true);
+    if(recipesError)return fail('Não foi possível verificar as fichas técnicas.',500);
+    const required=new Set((activeRecipes||[]).map(r=>String(r.id)));
+    if(required.size!==submitted.length||submitted.some((id:string)=>!required.has(id)))return fail('Ainda há fichas técnicas por consultar.');
+    const revision='menu-training-v1';const {error}=await db.from('staff_onboarding_acknowledgements').upsert({profile_id:actor.id,revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,revision'});
+    return error?fail('Não foi possível guardar a confirmação da carta.',400):reply({ok:true,revision,items:required.size});
   }
 
   if (action === 'stock:list') {
