@@ -133,15 +133,15 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
-  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','schedule:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:menu-acknowledge']);
+  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if(action==='onboarding:status'){
-    const revisions=['welcome-preguica-v2','menu-training-v1'];let query=db.from('staff_onboarding_acknowledgements').select('profile_id,revision,acknowledged_at').in('revision',revisions);
+    const revision='welcome-preguica-v2';let query=db.from('staff_onboarding_acknowledgements').select('profile_id,revision,acknowledged_at').eq('revision',revision);
     if(actor.role==='staff')query=query.eq('profile_id',actor.id);
     const {data,error}=await query.order('acknowledged_at',{ascending:false});if(error)return fail('Não foi possível carregar o estado de integração.',500);
     const {data:profiles}=actor.role==='staff'?await db.from('profiles').select('id,display_name').eq('id',actor.id):await db.from('profiles').select('id,display_name').eq('active',true).eq('role','staff').order('display_name');
-    return reply({acknowledgements:(profiles||[]).map(p=>{const rows=(data||[]).filter(x=>x.profile_id===p.id);return{profile_id:p.id,display_name:p.display_name,acknowledged_at:rows.find(x=>x.revision==='welcome-preguica-v2')?.acknowledged_at||null,menu_acknowledged_at:rows.find(x=>x.revision==='menu-training-v1')?.acknowledged_at||null};})});
+    return reply({acknowledgements:(profiles||[]).map(p=>{const row=(data||[]).find(x=>x.profile_id===p.id);return{profile_id:p.id,display_name:p.display_name,acknowledged_at:row?.acknowledged_at||null};})});
   }
   if(action==='onboarding:acknowledge'){
     const revision='welcome-preguica-v2';const {error}=await db.from('staff_onboarding_acknowledgements').upsert({profile_id:actor.id,revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,revision'});
@@ -151,16 +151,6 @@ Deno.serve(async (req: Request) => {
     const {data,error}=await db.from('product_recipes').select('id,name,category,ingredients,method').eq('active',true).order('category').order('name');
     if(error)return fail('Não foi possível carregar os artigos da carta.',500);
     return reply({recipes:(data||[]).map(r=>({id:r.id,name:r.name,category:r.category||'Outros',ingredients:Array.isArray(r.ingredients)?r.ingredients.join('; '):String(r.ingredients||''),training_note:/receita.{0,20}(confirmar|por confirmar)|confirmar.{0,20}receita|componente.{0,30}(por definir|a definir)|receita indicativa/i.test(String(r.method||''))?'Confirmar esta receita com a Gerência antes de a preparar.':''}))});
-  }
-  if(action==='onboarding:menu-acknowledge'){
-    const submitted=Array.isArray(body.recipeIds)?[...new Set(body.recipeIds.map((x:unknown)=>String(x)))]:[];
-    if(!submitted.length||submitted.some((id:string)=>!/^[0-9a-f-]{36}$/i.test(id)))return fail('Consulta todas as fichas técnicas antes de concluir.');
-    const {data:activeRecipes,error:recipesError}=await db.from('product_recipes').select('id').eq('active',true);
-    if(recipesError)return fail('Não foi possível verificar as fichas técnicas.',500);
-    const required=new Set((activeRecipes||[]).map(r=>String(r.id)));
-    if(required.size!==submitted.length||submitted.some((id:string)=>!required.has(id)))return fail('Ainda há fichas técnicas por consultar.');
-    const revision='menu-training-v1';const {error}=await db.from('staff_onboarding_acknowledgements').upsert({profile_id:actor.id,revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,revision'});
-    return error?fail('Não foi possível guardar a confirmação da carta.',400):reply({ok:true,revision,items:required.size});
   }
 
   if (action === 'stock:list') {
@@ -297,9 +287,16 @@ Deno.serve(async (req: Request) => {
   if (action === 'attendance:record') {
     if(actor.role!=='staff')return fail('A assiduidade é registada pela própria colaboradora. A Gerência valida e corrige no histórico.',403);
     const kind=String(body.kind||''), at=String(body.occurredAt||''),shiftId=String(body.shiftId||'');
-    if(!['clock_in','clock_out','late','early_departure','absence','medical_leave','vacation'].includes(kind)||Number.isNaN(Date.parse(at))||Date.parse(at)>Date.now())return fail('Indica tipo, data e hora válidos.');
-    if(shiftId){if(!/^[0-9a-f-]{36}$/i.test(shiftId))return fail('Turno inválido.');const {data:shift,error:shiftError}=await db.from('shifts').select('id,schedule_id,staff_id').eq('id',shiftId).eq('staff_id',actor.id).maybeSingle();if(shiftError||!shift)return fail('Só podes registar ocorrências nos teus próprios turnos.',403);const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('id',shift.schedule_id).eq('status','published').maybeSingle();if(scheduleError||!schedule)return fail('Este turno ainda não foi publicado.',403);}
-    const {error}=await db.from('attendance_records').insert({staff_id:actor.id,shift_id:shiftId||null,submitted_by:actor.id,kind,occurred_at:new Date(at).toISOString(),note:String(body.note||'').slice(0,1000),status:'pending'});
+    if(!['clock_in','clock_out','absence','medical_leave','vacation'].includes(kind)||Number.isNaN(Date.parse(at))||Date.parse(at)>Date.now())return fail('Indica tipo, data e hora válidos.');
+    if(!/^[0-9a-f-]{36}$/i.test(shiftId))return fail('Abre um turno publicado antes de registar a assiduidade.');
+    const {data:shift,error:shiftError}=await db.from('shifts').select('id,schedule_id,staff_id,shift_date').eq('id',shiftId).eq('staff_id',actor.id).maybeSingle();if(shiftError||!shift)return fail('Só podes registar ocorrências nos teus próprios turnos.',403);
+    const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('id',shift.schedule_id).eq('status','published').maybeSingle();if(scheduleError||!schedule)return fail('Este turno ainda não foi publicado.',403);
+    const startOfShift=Date.parse(`${shift.shift_date}T00:00:00Z`),occurred=Date.parse(at),dayOfEvent=new Date(`${dateInTimezone(at)}T00:00:00Z`).getTime();if(dayOfEvent<startOfShift||dayOfEvent>startOfShift+86400000)return fail('A ocorrência tem de pertencer ao dia do turno ou à manhã seguinte.');
+    const {data:prior,error:priorError}=await db.from('attendance_records').select('id,kind,status').eq('shift_id',shiftId).eq('staff_id',actor.id).neq('status','rejected');if(priorError)return fail('Não foi possível validar os registos deste turno.',500);
+    if(['clock_in','absence','medical_leave','vacation'].includes(kind)&&prior?.some(x=>['clock_in','absence','medical_leave','vacation'].includes(x.kind)))return fail('Já existe uma entrada ou ocorrência registada para este turno.');
+    if(kind==='clock_out'&&!prior?.some(x=>x.kind==='clock_in'))return fail('Regista primeiro a entrada deste turno.');
+    if(kind==='clock_out'&&prior?.some(x=>x.kind==='clock_out'))return fail('A saída deste turno já foi registada.');
+    const {error}=await db.from('attendance_records').insert({staff_id:actor.id,shift_id:shiftId,submitted_by:actor.id,kind,occurred_at:new Date(occurred).toISOString(),note:String(body.note||'').slice(0,1000),status:'pending'});
     return error?fail('Não foi possível guardar a assiduidade.',400):reply({ok:true});
   }
   if (action === 'attendance:note') {
