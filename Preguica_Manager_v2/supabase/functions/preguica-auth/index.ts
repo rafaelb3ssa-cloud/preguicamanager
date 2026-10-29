@@ -230,7 +230,7 @@ Deno.serve(async (req: Request) => {
 
   if (action === 'schedule:list') {
     const week=String(body.weekStart||''); if(!validDate(week))return fail('Indica a segunda-feira da semana.');
-    const {data:schedules,error}=await db.from('weekly_schedules').select('id,week_start,version,status,published_at').eq('week_start',week).in('status',actor.role==='staff'?['published']:['draft','published']).order('version',{ascending:false}).limit(1);
+    const {data:schedules,error}=await db.from('weekly_schedules').select('id,week_start,version,status,published_at,accumulated_hours').eq('week_start',week).in('status',actor.role==='staff'?['published']:['draft','published']).order('version',{ascending:false}).limit(1);
     if(error)return fail('Não foi possível carregar o horário.',500); const schedule=schedules?.[0];
     const [profiles,shifts]=await Promise.all([db.from('profiles').select('id,display_name,weekly_hours').eq('active',true).eq('role','staff').order('display_name'),schedule?db.from('shifts').select('id,staff_id,shift_date,starts_at,ends_at,break_minutes,notes').eq('schedule_id',schedule.id).order('shift_date'):Promise.resolve({data:[],error:null})]);
     const monthStart=`${week.slice(0,7)}-01`;
@@ -244,6 +244,8 @@ Deno.serve(async (req: Request) => {
     const addHours=(row:{staff_id:string;starts_at:string;ends_at:string;break_minutes:number|null})=>{const [sh,sm]=String(row.starts_at).slice(0,5).split(':').map(Number),[eh,em]=String(row.ends_at).slice(0,5).split(':').map(Number);let minutes=eh*60+em-sh*60-sm;if(minutes<0)minutes+=1440;accumulated[row.staff_id]=(accumulated[row.staff_id]||0)+Math.max(0,minutes-(row.break_minutes||0))/60};
     for(const row of priorShifts||[])addHours(row);
     for(const row of shifts.data||[])addHours(row);
+    const savedBalances=schedule?.accumulated_hours&&typeof schedule.accumulated_hours==='object'?schedule.accumulated_hours as Record<string,unknown>:{};
+    for(const profile of profiles.data||[]){const balance=savedBalances[profile.id];if(typeof balance==='number'&&Number.isFinite(balance))accumulated[profile.id]=balance;}
     return reply({schedule:schedule||null,profiles:profiles.data||[],shifts:shifts.data||[],accumulated});
   }
   if (action === 'schedule:save') {
