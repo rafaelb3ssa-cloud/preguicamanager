@@ -143,7 +143,7 @@ Deno.serve(async (req: Request) => {
     const {error}=await db.rpc('change_profile_pin',{p_profile_id:actor.id,p_pin:newPin});
     return error?fail('Não foi possível alterar o PIN.',400):reply({ok:true});
   }
-  const staffActions=new Set(['pin:change','suppliers:list','supplier-orders:list','supplier-orders:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','recipes:list']);
+  const staffActions=new Set(['pin:change','suppliers:list','supplier-orders:list','supplier-orders:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if(action==='onboarding:status'){
@@ -165,6 +165,33 @@ Deno.serve(async (req: Request) => {
   if(action==='onboarding:modules:list'){
     const {data,error}=await db.from('staff_onboarding_modules').select('module_key,title,body,sort_order').order('sort_order');
     return error?fail('Não foi possível carregar os módulos de integração.',500):reply({modules:data||[]});
+  }
+  if(action==='onboarding:learning-progress'||action==='onboarding:learning-acknowledge'){
+    const {data:moduleRows,error:moduleError}=await db.from('staff_onboarding_modules').select('module_key,title,body').order('module_key');
+    if(moduleError)return fail('Não foi possível carregar os módulos para o progresso.',500);
+    const moduleByKey=new Map((moduleRows||[]).map(m=>[m.module_key,m]));
+    const learningItems=[];
+    for(let i=1;i<=9;i++){
+      const id=`module-${String(i).padStart(2,'0')}`,row=moduleByKey.get(id);
+      const revision=row?`profile-learning-v1:module:${id}:${await sha(`${row.title}\u0000${row.body}`)}`:`profile-learning-v1:module:${id}:builtin-v1`;
+      learningItems.push({revision,kind:'module',item_id:id,title:row?.title||`Módulo ${i}`});
+    }
+    const {data:recipeRows,error:recipeError}=await db.from('product_recipes').select('id,name,category,ingredients,method,history').eq('active',true).order('name');
+    if(recipeError)return fail('Não foi possível carregar as fichas para o progresso.',500);
+    for(const recipe of recipeRows||[]){
+      const content=JSON.stringify([recipe.name,recipe.category,recipe.ingredients,recipe.method,recipe.history]);
+      learningItems.push({revision:`profile-learning-v1:recipe:${recipe.id}:${await sha(content)}`,kind:'recipe',item_id:recipe.id,title:recipe.name});
+    }
+    if(action==='onboarding:learning-acknowledge'){
+      const itemKey=String(body.itemKey||''),item=learningItems.find(x=>x.revision===itemKey);
+      if(!item)return fail('Este módulo ou ficha foi atualizado. Atualiza o progresso e consulta a versão atual.',409);
+      const {error}=await db.from('staff_onboarding_acknowledgements').upsert({profile_id:actor.id,revision:item.revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,revision'});
+      return error?fail('Não foi possível guardar este visto.',400):reply({ok:true,itemKey:item.revision});
+    }
+    const {data:acknowledgements,error}=await db.from('staff_onboarding_acknowledgements').select('revision,acknowledged_at').eq('profile_id',actor.id).like('revision','profile-learning-v1:%');
+    if(error)return fail('Não foi possível carregar os vistos do perfil.',500);
+    const completed=new Map((acknowledgements||[]).map(x=>[x.revision,x.acknowledged_at]));
+    return reply({items:learningItems.map(item=>({...item,acknowledged_at:completed.get(item.revision)||null}))});
   }
   if(action==='onboarding:modules:save'){
     if(!canManage(actor))return fail('Só a Gerência pode editar os textos de integração.',403);
