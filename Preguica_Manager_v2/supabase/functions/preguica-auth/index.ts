@@ -244,7 +244,7 @@ Deno.serve(async (req: Request) => {
     const item = body.item && typeof body.item === 'object' ? body.item as Record<string, unknown> : {};
     const name = String(item.name || '').trim(), unit = String(item.unit || '').trim();
     const quantity = Number(item.quantity), minimum = Number(item.minimum_quantity), cost = item.unit_cost_ex_vat == null ? null : Number(item.unit_cost_ex_vat);
-    if (!name || !unit || name.length > 120 || !Number.isFinite(quantity) || quantity < 0 || !Number.isFinite(minimum) || minimum < 0 || (cost !== null && (!Number.isFinite(cost) || cost < 0))) return fail('Confirma os dados do artigo.');
+    if (!name || !unit || name.length > 120 || !Number.isFinite(quantity) || quantity < 0 || !Number.isFinite(minimum) || minimum < 0 || (!item.id && minimum <= 0) || (cost !== null && (!Number.isFinite(cost) || cost < 0))) return fail(!item.id && minimum <= 0 ? 'Define uma quantidade mínima superior a zero para o novo artigo.' : 'Confirma os dados do artigo.');
     const record = { name, category: String(item.category || 'Outros').slice(0, 80), unit, quantity, minimum_quantity: minimum, supplier_name: String(item.supplier_name || '').slice(0, 160) || null, unit_cost_ex_vat: cost, updated_by: actor.id, updated_at: new Date().toISOString(), active: true };
     const result = item.id ? await db.from('stock_items').update(record).eq('id', item.id).select('id').single() : await db.from('stock_items').insert(record).select('id').single();
     return result.error ? fail('Não foi possível guardar o artigo.', 400) : reply({ id: result.data.id });
