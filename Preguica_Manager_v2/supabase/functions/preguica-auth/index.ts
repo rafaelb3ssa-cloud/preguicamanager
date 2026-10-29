@@ -133,8 +133,20 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
-  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','schedule:list','recipes:list','activity:pending','activity:logs:list','activity:save-draft','activity:submit']);
+  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
+
+  if(action==='onboarding:status'){
+    const revision='welcome-preguica-v1';let query=db.from('staff_onboarding_acknowledgements').select('profile_id,revision,acknowledged_at').eq('revision',revision);
+    if(actor.role==='staff')query=query.eq('profile_id',actor.id);
+    const {data,error}=await query.order('acknowledged_at',{ascending:false});if(error)return fail('Não foi possível carregar o estado de integração.',500);
+    const ids=[...new Set((data||[]).map(x=>x.profile_id))],{data:profiles}=actor.role==='staff'?await db.from('profiles').select('id,display_name').eq('id',actor.id):await db.from('profiles').select('id,display_name').eq('active',true).eq('role','staff').order('display_name');
+    return reply({revision,acknowledgements:(profiles||[]).map(p=>{const ack=(data||[]).find(x=>x.profile_id===p.id);return{profile_id:p.id,display_name:p.display_name,revision,acknowledged_at:ack?.acknowledged_at||null};})});
+  }
+  if(action==='onboarding:acknowledge'){
+    const revision='welcome-preguica-v1';const {error}=await db.from('staff_onboarding_acknowledgements').upsert({profile_id:actor.id,revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,revision'});
+    return error?fail('Não foi possível guardar a confirmação.',400):reply({ok:true,revision});
+  }
 
   if (action === 'stock:list') {
     const { data, error } = await db.from('stock_items').select('id,name,category,unit,quantity,minimum_quantity,supplier_name,unit_cost_ex_vat,active').eq('active', true).order('category').order('name');
@@ -261,7 +273,7 @@ Deno.serve(async (req: Request) => {
     const existing=await db.from('weekly_schedules').select('id,version').eq('week_start',week).eq('status','draft').order('version',{ascending:false}).limit(1).maybeSingle();
     let schedule=existing.data;
     if(!schedule){const prior=await db.from('weekly_schedules').select('version,accumulated_hours').eq('week_start',week).order('version',{ascending:false}).limit(1).maybeSingle();const made=await db.from('weekly_schedules').insert({week_start:week,version:(prior.data?.version||0)+1,status:'draft',accumulated_hours:prior.data?.accumulated_hours||{}}).select('id,version').single();if(made.error)return fail('Não foi possível criar o rascunho.',400);schedule=made.data;}
-    const clean=[]; for(const s of items){if(!validDate(String(s.date||''))||String(s.date)<week||String(s.date)>=new Date(Date.parse(week+'T00:00:00Z')+7*86400000).toISOString().slice(0,10)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(s.start||''))||!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(s.end||''))||!/^[0-9a-f-]{36}$/i.test(String(s.staffId||'')))return fail('Há um turno inválido.');clean.push({schedule_id:schedule.id,staff_id:s.staffId,shift_date:s.date,starts_at:s.start,ends_at:s.end,break_minutes:Math.max(0,Number(s.breakMinutes)||0),notes:String(s.notes||'').slice(0,300)});}
+    const clean=[]; for(const s of items){if(!validDate(String(s.date||''))||String(s.date)<week||String(s.date)>=new Date(Date.parse(week+'T00:00:00Z')+7*86400000).toISOString().slice(0,10)||new Date(`${String(s.date)}T12:00:00Z`).getUTCDay()===0||!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(s.start||''))||!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(s.end||''))||!/^[0-9a-f-]{36}$/i.test(String(s.staffId||'')))return fail('Há um turno inválido. Ao domingo a equipa está sempre de folga.');clean.push({schedule_id:schedule.id,staff_id:s.staffId,shift_date:s.date,starts_at:s.start,ends_at:s.end,break_minutes:Math.max(0,Number(s.breakMinutes)||0),notes:String(s.notes||'').slice(0,300)});}
     const staffIds=[...new Set(clean.map(x=>x.staff_id))]; if(staffIds.length){const {data:validStaff,error:staffError}=await db.from('profiles').select('id').in('id',staffIds).eq('active',true).eq('role','staff');if(staffError||validStaff?.length!==staffIds.length)return fail('O horário pode incluir apenas colaboradoras ativas.',403)}
     await db.from('shifts').delete().eq('schedule_id',schedule.id); if(clean.length){const {error}=await db.from('shifts').insert(clean);if(error)return fail('Não foi possível guardar os turnos.',400)} return reply({ok:true,scheduleId:schedule.id});
   }
