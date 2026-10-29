@@ -143,24 +143,24 @@ Deno.serve(async (req: Request) => {
     const {error}=await db.rpc('change_profile_pin',{p_profile_id:actor.id,p_pin:newPin});
     return error?fail('Não foi possível alterar o PIN.',400):reply({ok:true});
   }
-  const staffActions=new Set(['pin:change','suppliers:list','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','recipes:list']);
+  const staffActions=new Set(['pin:change','suppliers:list','supplier-orders:list','supplier-orders:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','recipes:list']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if(action==='onboarding:status'){
-    const revision='welcome-preguica-v2';let query=db.from('staff_onboarding_acknowledgements').select('profile_id,revision,acknowledged_at').eq('revision',revision);
+    const revision='welcome-preguica-v3';let query=db.from('staff_onboarding_acknowledgements').select('profile_id,revision,acknowledged_at').eq('revision',revision);
     if(actor.role==='staff')query=query.eq('profile_id',actor.id);
     const {data,error}=await query.order('acknowledged_at',{ascending:false});if(error)return fail('Não foi possível carregar o estado de integração.',500);
     const {data:profiles}=actor.role==='staff'?await db.from('profiles').select('id,display_name').eq('id',actor.id):await db.from('profiles').select('id,display_name').eq('active',true).eq('role','staff').order('display_name');
     return reply({acknowledgements:(profiles||[]).map(p=>{const row=(data||[]).find(x=>x.profile_id===p.id);return{profile_id:p.id,display_name:p.display_name,acknowledged_at:row?.acknowledged_at||null};})});
   }
   if(action==='onboarding:acknowledge'){
-    const revision='welcome-preguica-v2';const {error}=await db.from('staff_onboarding_acknowledgements').upsert({profile_id:actor.id,revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,revision'});
+    const revision='welcome-preguica-v3';const {error}=await db.from('staff_onboarding_acknowledgements').upsert({profile_id:actor.id,revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,revision'});
     return error?fail('Não foi possível guardar a confirmação.',400):reply({ok:true,revision});
   }
   if(action==='onboarding:menu'){
-    const {data,error}=await db.from('product_recipes').select('id,name,category,ingredients,method').eq('active',true).order('category').order('name');
+    const {data,error}=await db.from('product_recipes').select('id,name,category,ingredients,method,history').eq('active',true).order('category').order('name');
     if(error)return fail('Não foi possível carregar os artigos da carta.',500);
-    return reply({recipes:(data||[]).map(r=>({id:r.id,name:r.name,category:r.category||'Outros',ingredients:Array.isArray(r.ingredients)?r.ingredients.join('; '):String(r.ingredients||''),method:String(r.method||''),training_note:/receita.{0,20}(confirmar|por confirmar)|confirmar.{0,20}receita|componente.{0,30}(por definir|a definir)|receita indicativa/i.test(String(r.method||''))?'Confirmar esta receita com a Gerência antes de a preparar.':''}))});
+    return reply({recipes:(data||[]).map(r=>({id:r.id,name:r.name,category:r.category||'Outros',ingredients:Array.isArray(r.ingredients)?r.ingredients.join('; '):String(r.ingredients||''),method:String(r.method||''),history:String(r.history||''),training_note:/receita.{0,20}(confirmar|por confirmar)|confirmar.{0,20}receita|componente.{0,30}(por definir|a definir)|receita indicativa/i.test(String(r.method||''))?'Confirmar esta receita com a Gerência antes de a preparar.':''}))});
   }
   if(action==='onboarding:modules:list'){
     const {data,error}=await db.from('staff_onboarding_modules').select('module_key,title,body,sort_order').order('sort_order');
@@ -268,6 +268,28 @@ Deno.serve(async (req: Request) => {
     const record = { name, category: String(item.category || 'Outros').slice(0, 80), unit, quantity, minimum_quantity: minimum, supplier_name: String(item.supplier_name || '').slice(0, 160) || null, unit_cost_ex_vat: cost, updated_by: actor.id, updated_at: new Date().toISOString(), active: true };
     const result = item.id ? await db.from('stock_items').update(record).eq('id', item.id).select('id').single() : await db.from('stock_items').insert(record).select('id').single();
     return result.error ? fail('Não foi possível guardar o artigo.', 400) : reply({ id: result.data.id });
+  }
+
+  if (action === 'supplier-orders:list') {
+    const date=String(body.date||dateInTimezone(new Date().toISOString()));
+    if(!validDate(date)||date!==dateInTimezone(new Date().toISOString()))return fail('Só é possível consultar a lista de encomendas de hoje.');
+    const day=new Date(`${date}T12:00:00Z`),weekday=((day.getUTCDay()+6)%7)+1;
+    const {data:suppliers,error:supplierError}=await db.from('suppliers').select('id,name,phone,order_weekday,delivery_weekday').eq('active',true).eq('order_weekday',weekday).order('name');
+    if(supplierError)return fail('Não foi possível carregar as encomendas previstas.',500);
+    const ids=(suppliers||[]).map(x=>x.id);const {data:checks,error:checksError}=ids.length?await db.from('supplier_order_checks').select('supplier_id,completed_by,completed_at').eq('order_date',date).in('supplier_id',ids):{data:[],error:null};
+    if(checksError)return fail('Não foi possível carregar as confirmações das encomendas.',500);
+    const profileIds=[...new Set((checks||[]).map(x=>x.completed_by))],{data:profiles}=profileIds.length?await db.from('profiles').select('id,display_name').in('id',profileIds):{data:[]};
+    return reply({orders:(suppliers||[]).map(s=>{const check=(checks||[]).find(x=>x.supplier_id===s.id);return{...s,completed_at:check?.completed_at||null,completed_by_name:(profiles||[]).find(p=>p.id===check?.completed_by)?.display_name||null}})});
+  }
+  if (action === 'supplier-orders:mark') {
+    const supplierId=String(body.supplierId||''),date=String(body.date||dateInTimezone(new Date().toISOString()));
+    if(!/^[0-9a-f-]{36}$/i.test(supplierId)||!validDate(date)||date!==dateInTimezone(new Date().toISOString()))return fail('Confirma o fornecedor e a data de hoje.');
+    const day=new Date(`${date}T12:00:00Z`),weekday=((day.getUTCDay()+6)%7)+1;
+    const {data:supplier,error:supplierError}=await db.from('suppliers').select('id').eq('id',supplierId).eq('active',true).eq('order_weekday',weekday).maybeSingle();
+    if(supplierError||!supplier)return fail('Este fornecedor não tem encomenda prevista para hoje.',403);
+    const {error}=await db.from('supplier_order_checks').insert({supplier_id:supplierId,order_date:date,completed_by:actor.id,completed_at:new Date().toISOString()});
+    if(error)return fail(error.code==='23505'?'Esta encomenda já foi carimbada hoje.':'Não foi possível carimbar a encomenda.',error.code==='23505'?409:400);
+    return reply({ok:true});
   }
 
   if (action === 'suppliers:list') {
@@ -591,13 +613,13 @@ Deno.serve(async (req: Request) => {
   }
 
   if (action === 'recipes:list') {
-    const fields=actor.role==='staff'?'id,name,category,ingredients,method,allergens,active':'id,name,category,sale_price_inc_vat,ingredient_cost_ex_vat,ingredients,method,allergens,active';
+    const fields=actor.role==='staff'?'id,name,category,ingredients,method,history,allergens,active':'id,name,category,sale_price_inc_vat,ingredient_cost_ex_vat,ingredients,method,history,allergens,active';
     const { data, error } = await db.from('product_recipes').select(fields).eq('active', true).order('category').order('name');
     if (error) return fail('Não foi possível carregar as fichas técnicas.', 500);
     const recipes = (data || []).map((r) => ({
       id: r.id, name: r.name, category: r.category,
       ...(actor.role==='staff'?{}:{sale:Number(r.sale_price_inc_vat),cost:Number(r.ingredient_cost_ex_vat)}),
-      ingredients: Array.isArray(r.ingredients) ? r.ingredients.join('; ') : String(r.ingredients || ''), method: r.method || '', allergens: Array.isArray(r.allergens) ? r.allergens : [],
+      ingredients: Array.isArray(r.ingredients) ? r.ingredients.join('; ') : String(r.ingredients || ''), method: r.method || '', history:r.history||'', allergens: Array.isArray(r.allergens) ? r.allergens : [],
     }));
     return reply({ recipes });
   }
@@ -610,7 +632,7 @@ Deno.serve(async (req: Request) => {
     const allergens=Array.isArray(r.allergens)?r.allergens.map(x=>String(x).trim()).filter(Boolean):String(r.allergens||'').split(/[;,\\n]/).map(x=>x.trim()).filter(Boolean);
     if(allergens.length>30||allergens.some(x=>x.length>80))return fail('Revê a lista de alergénios (máximo de 30 itens).');
     const record = { name, category: String(r.category || '').slice(0, 100), sale_price_inc_vat: sale, ingredient_cost_ex_vat: cost,
-      ingredients: [String(r.ingredients || '')], method: String(r.method || '').slice(0, 4000), allergens, active: true, updated_by: actor.id, updated_at: new Date().toISOString() };
+      ingredients: [String(r.ingredients || '')], method: String(r.method || '').slice(0, 4000), history:String(r.history||'').slice(0,1600), allergens, active: true, updated_by: actor.id, updated_at: new Date().toISOString() };
     const existingName = String(body.existingName || '').trim();
     const { error } = existingName && existingName !== name
       ? await db.from('product_recipes').update(record).eq('name', existingName)

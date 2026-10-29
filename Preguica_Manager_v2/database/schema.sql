@@ -131,6 +131,7 @@ create table public.product_recipes (
   ingredient_cost_ex_vat numeric(12,4) not null default 0 check (ingredient_cost_ex_vat >= 0),
   ingredients jsonb not null default '[]'::jsonb,
   method text,
+  history text,
   allergens text[] not null default '{}',
   active boolean not null default true,
   updated_by uuid references public.profiles(id),
@@ -198,3 +199,26 @@ create table public.monthly_inventory_counts (
 alter table public.monthly_inventory_counts enable row level security;
 revoke all on public.monthly_inventory_counts from public, anon, authenticated;
 grant all on public.monthly_inventory_counts to service_role;
+
+
+create table if not exists public.suppliers (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  phone text,
+  order_weekday smallint not null check (order_weekday between 1 and 7),
+  delivery_weekday smallint not null check (delivery_weekday between 1 and 7),
+  active boolean not null default true,
+  created_by uuid references public.profiles(id),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.supplier_order_checks (
+  supplier_id uuid not null references public.suppliers(id) on delete cascade,
+  order_date date not null,
+  completed_by uuid not null references public.profiles(id),
+  completed_at timestamptz not null default now(),
+  primary key (supplier_id, order_date)
+);
+alter table public.supplier_order_checks enable row level security;
+revoke all on table public.supplier_order_checks from public, anon, authenticated;
+grant select, insert, update, delete on table public.supplier_order_checks to service_role;
