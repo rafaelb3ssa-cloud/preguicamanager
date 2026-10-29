@@ -45,8 +45,8 @@ Deno.serve(async (req: Request) => {
     if (error) return fail('Não foi possível carregar os utilizadores.', 500);
     const profiles=data||[];
     const manager=profiles.find(p=>p.role==='owner')||profiles.find(p=>p.role==='manager');
-    const collaborator=profiles.find(p=>p.role==='staff');
-    return reply({ users:[...(manager?[{...manager,login_label:'Gerência'}]:[]),...(collaborator?[{...collaborator,login_label:'Colaborador'}]:[])] });
+    const collaborators=profiles.filter(p=>p.role==='staff').map(p=>({...p,login_label:p.display_name}));
+    return reply({ users:[...(manager?[{...manager,login_label:'Gerência'}]:[]),...collaborators] });
   }
 
   if (action === 'login') {

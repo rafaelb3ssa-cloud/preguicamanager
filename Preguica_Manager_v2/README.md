@@ -4,11 +4,11 @@
 
 A branch `codex/preguica-manager-v2-permissions` está ligada ao projeto Vercel `preguicamanager-web`. A versão aprovada foi publicada em produção a partir do commit `f9722bd7b9c1b4c28a411fffb838dbc2dc67d4e9`. O domínio `preguicamanager-web.vercel.app` serve `web/index.html` e recebeu HTTP 200 após a publicação. A produção permanece associada ao projeto Vercel existente.
 
-A autenticação por PIN e as operações sensíveis passam pelo Edge Function `preguica-auth`, com sessões opacas e autorização no servidor. PINs são armazenados como hashes; a chave service-role fica apenas no ambiente da Edge Function. O ecrã de login apresenta apenas Gerência ou Colaborador. A escolha determina o perfil no servidor; o PIN nunca é validado só no browser. Para já, o login Colaborador usa o perfil Alice existente. Na aplicação, esse perfil vê apenas HACCP e os seus submenus, fichas técnicas em consulta e stock/compras. Só a Gerência vê os restantes módulos e pode editar fichas, configurar artigos ou gerir horários, férias e equipa. Os módulos de horários, assiduidade, higienização das instalações, fornecedores e stock usam operações persistentes na base de dados. Alertas automáticos continuam demonstrativos.
+A autenticação por PIN e as operações sensíveis passam pelo Edge Function `preguica-auth`, com sessões opacas e autorização no servidor. PINs são armazenados como hashes; a chave service-role fica apenas no ambiente da Edge Function. O ecrã de login apresenta Gerência e cada perfil de colaboradora pelo nome; cada PIN identifica o respetivo perfil no servidor. Os PINs são hashes e podem ser alterados pela Gerência na gestão da equipa; o PIN nunca é validado só no browser. Na aplicação, esse perfil vê apenas HACCP e os seus submenus, fichas técnicas em consulta e stock/compras. Só a Gerência vê os restantes módulos e pode editar fichas, configurar artigos ou gerir horários, férias e equipa. Os módulos de horários, assiduidade, higienização das instalações, fornecedores e stock usam operações persistentes na base de dados. Alertas automáticos continuam demonstrativos.
 
 ## Equipa e horários
 
-Alice tem base semanal de 40 horas; Inês Machado, 40 horas; Inês Sequeira, 25 horas. Inês Machado e Inês Sequeira já estão na equipa, mas ainda não têm PIN próprio definido. O login Colaborador atual está associado ao perfil Alice até serem configuradas contas individuais.
+Alice tem base semanal de 40 horas; Inês Machado, 40 horas; Inês Sequeira, 25 horas. Alice, Inês Machado e Inês Sequeira têm perfis individuais no login. Cada uma entra no próprio perfil; a Gerência pode alterar os PINs na gestão da equipa.
 
 A grelha semanal permite inserir um ou mais intervalos por dia, guardar rascunhos, publicar para consulta da equipa e criar uma revisão de um horário publicado. Horas reais de turnos ainda devem ser preenchidas pela Gerência; não foram inventados horários.
 
@@ -20,7 +20,7 @@ O total anual é 22 dias de férias: 11 em janeiro, 5 em junho/julho, 4 em agost
 
 ## Stock e fornecedores
 
-A lista sugerida calcula `max(0, mínimo configurado - quantidade atual)`. A colaboradora pode atualizar quantidades reais, mas não pode criar artigos nem mudar mínimos, preços ou fornecedores. Existem categorias para organizar o inventário.
+A lista sugerida calcula `max(0, mínimo configurado - quantidade atual)` e mostra a diferença a comprar por artigo. A colaboradora pode atualizar quantidades reais e consultar/encomendar; apenas a Gerência pode criar ou editar artigos, mínimos, preços e fornecedores. Existem categorias para organizar o inventário.
 
 Fornecedores e entregas registados: Recheio (segunda/terça), Sumol Compal (terça/quarta), Super Bock e gelo (quarta/quinta), pão, garrafeira e fruta (quinta/sexta). Telefones estão vazios porque não foram fornecidos.
 
