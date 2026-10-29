@@ -38,6 +38,7 @@ const dateInTimezone = (value: string | Date, timeZone = 'Europe/Lisbon') => {
   return `${part('year')}-${part('month')}-${part('day')}`;
 };
 const lisbonToday = () => dateInTimezone(new Date());
+const timeInTimezone = (value: string | Date, timeZone = 'Europe/Lisbon') => new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(value));
 const shiftIsoDate = (value: string, days: number) => { const d = new Date(`${value}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0,10); };
 const mondayOf = (value: string) => shiftIsoDate(value, -((new Date(`${value}T12:00:00Z`).getUTCDay() + 6) % 7));
 async function pagedRows<T>(makeQuery: (from: number, to: number) => any): Promise<T[]> {
@@ -299,21 +300,21 @@ Deno.serve(async (req: Request) => {
   }
   if (action === 'attendance:record') {
     if(actor.role!=='staff')return fail('A assiduidade é registada pela própria colaboradora. A Gerência valida e corrige no histórico.',403);
-    const kind=String(body.kind||''), at=String(body.occurredAt||''),shiftId=String(body.shiftId||'');
+    const requestedKind=String(body.kind||''),kind=requestedKind==='late'?'clock_in':requestedKind==='early_departure'?'clock_out':requestedKind,at=String(body.occurredAt||''),shiftId=String(body.shiftId||'');let note=String(body.note||'');if(requestedKind==='late'&&!note)note='Entrada com atraso';if(requestedKind==='early_departure'&&!note)note='Saída antecipada';
     if(!['clock_in','clock_out','late','early_departure','absence','medical_leave','vacation'].includes(kind)||Number.isNaN(Date.parse(at))||Date.parse(at)>Date.now())return fail('Indica tipo, data e hora válidos.');
     let linkedShiftId:string|null=null;
     if(shiftId){
       if(!/^[0-9a-f-]{36}$/i.test(shiftId))return fail('Turno inválido.');
-      const {data:shift,error:shiftError}=await db.from('shifts').select('id,schedule_id,staff_id,shift_date').eq('id',shiftId).eq('staff_id',actor.id).maybeSingle();if(shiftError||!shift)return fail('Só podes registar ocorrências nos teus próprios turnos.',403);
+      const {data:shift,error:shiftError}=await db.from('shifts').select('id,schedule_id,staff_id,shift_date,starts_at,ends_at').eq('id',shiftId).eq('staff_id',actor.id).maybeSingle();if(shiftError||!shift)return fail('Só podes registar ocorrências nos teus próprios turnos.',403);
       const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('id',shift.schedule_id).eq('status','published').maybeSingle();if(scheduleError||!schedule)return fail('Este turno ainda não foi publicado.',403);
-      const startOfShift=Date.parse(`${shift.shift_date}T00:00:00Z`),dayOfEvent=new Date(`${dateInTimezone(at)}T00:00:00Z`).getTime();if(dayOfEvent<startOfShift||dayOfEvent>startOfShift+86400000)return fail('A ocorrência tem de pertencer ao dia do turno ou à manhã seguinte.');
+      const startOfShift=Date.parse(`${shift.shift_date}T00:00:00Z`),dayOfEvent=new Date(`${dateInTimezone(at)}T00:00:00Z`).getTime();if(dayOfEvent<startOfShift||dayOfEvent>startOfShift+86400000)return fail('A ocorrência tem de pertencer ao dia do turno ou à manhã seguinte.');if(kind==='clock_in'){const actualLocal=`${dateInTimezone(at)}T${timeInTimezone(at)}`,scheduledStart=`${shift.shift_date}T${String(shift.starts_at).slice(0,5)}`;if(actualLocal<scheduledStart)return fail(`A entrada só pode ser registada a partir das ${String(shift.starts_at).slice(0,5)}.`,403)}if(kind==='clock_out'&&!note){const start=String(shift.starts_at).slice(0,5),end=String(shift.ends_at).slice(0,5),endDate=end<=start?shiftIsoDate(shift.shift_date,1):shift.shift_date,actualLocal=`${dateInTimezone(at)}T${timeInTimezone(at)}`,scheduledEnd=`${endDate}T${end}`;if(actualLocal<scheduledEnd)note=`Saída antecipada · fim previsto às ${end}`;else if(actualLocal>scheduledEnd)note=`Tempo extra · fim previsto às ${end}`}
       const {data:prior,error:priorError}=await db.from('attendance_records').select('id,kind,status').eq('shift_id',shiftId).eq('staff_id',actor.id).neq('status','rejected');if(priorError)return fail('Não foi possível validar os registos deste turno.',500);
       if(['clock_in','absence','medical_leave','vacation'].includes(kind)&&prior?.some(x=>['clock_in','absence','medical_leave','vacation'].includes(x.kind)))return fail('Já existe uma entrada ou ocorrência registada para este turno.');
       if(kind==='clock_out'&&!prior?.some(x=>x.kind==='clock_in'))return fail('Regista primeiro a entrada deste turno.');
       if(kind==='clock_out'&&prior?.some(x=>x.kind==='clock_out'))return fail('A saída deste turno já foi registada.');
       linkedShiftId=shift.id;
     }
-    const {error}=await db.from('attendance_records').insert({staff_id:actor.id,shift_id:linkedShiftId,submitted_by:actor.id,kind,occurred_at:new Date(at).toISOString(),note:String(body.note||'').slice(0,1000),status:'pending'});
+    const {error}=await db.from('attendance_records').insert({staff_id:actor.id,shift_id:linkedShiftId,submitted_by:actor.id,kind,occurred_at:new Date(at).toISOString(),note:note.slice(0,1000),status:'pending'});
     return error?fail('Não foi possível guardar a assiduidade.',400):reply({ok:true});
   }
   if (action === 'attendance:note') {
