@@ -160,7 +160,7 @@ Deno.serve(async (req: Request) => {
   if(action==='onboarding:menu'){
     const {data,error}=await db.from('product_recipes').select('id,name,category,ingredients,method').eq('active',true).order('category').order('name');
     if(error)return fail('Não foi possível carregar os artigos da carta.',500);
-    return reply({recipes:(data||[]).map(r=>({id:r.id,name:r.name,category:r.category||'Outros',ingredients:Array.isArray(r.ingredients)?r.ingredients.join('; '):String(r.ingredients||''),training_note:/receita.{0,20}(confirmar|por confirmar)|confirmar.{0,20}receita|componente.{0,30}(por definir|a definir)|receita indicativa/i.test(String(r.method||''))?'Confirmar esta receita com a Gerência antes de a preparar.':''}))});
+    return reply({recipes:(data||[]).map(r=>({id:r.id,name:r.name,category:r.category||'Outros',ingredients:Array.isArray(r.ingredients)?r.ingredients.join('; '):String(r.ingredients||''),method:String(r.method||''),training_note:/receita.{0,20}(confirmar|por confirmar)|confirmar.{0,20}receita|componente.{0,30}(por definir|a definir)|receita indicativa/i.test(String(r.method||''))?'Confirmar esta receita com a Gerência antes de a preparar.':''}))});
   }
   if(action==='onboarding:modules:list'){
     const {data,error}=await db.from('staff_onboarding_modules').select('module_key,title,body,sort_order').order('sort_order');
