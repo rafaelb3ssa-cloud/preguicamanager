@@ -1,10 +1,10 @@
 # Preguiça Manager v2
 
-## Estado e pré-visualização
+## Estado de produção
 
-A branch `codex/preguica-manager-v2-permissions` está ligada ao projeto Vercel `preguicamanager-web`. A versão aprovada foi publicada em produção a partir do commit `f9722bd7b9c1b4c28a411fffb838dbc2dc67d4e9`. O domínio `preguicamanager-web.vercel.app` serve `web/index.html` e recebeu HTTP 200 após a publicação. A produção permanece associada ao projeto Vercel existente.
+O portal oficial está publicado no projeto Vercel `preguicamanager-web`, em [preguicamanager-web.vercel.app](https://preguicamanager-web.vercel.app/). A versão de produção é promovida do ramo de publicação `codex/preguica-release-20261029`; a raiz do site é `Preguica_Manager_v2/web`. A aplicação usa o Supabase `hmuzfvmpstejcnyiwbtx` e a função server-side `preguica-auth`.
 
-A autenticação por PIN e as operações sensíveis passam pelo Edge Function `preguica-auth`, com sessões opacas e autorização no servidor. PINs são armazenados como hashes; a chave service-role fica apenas no ambiente da Edge Function. O ecrã de login apresenta Gerência e cada perfil de colaboradora pelo nome; cada PIN identifica o respetivo perfil no servidor. Os PINs são hashes e podem ser alterados pela Gerência na gestão da equipa; o PIN nunca é validado só no browser. Na aplicação, esse perfil vê apenas HACCP e os seus submenus, fichas técnicas em consulta e stock/compras. Só a Gerência vê os restantes módulos e pode editar fichas, configurar artigos ou gerir horários, férias e equipa. Os módulos de horários, assiduidade, higienização das instalações, fornecedores e stock usam operações persistentes na base de dados. Alertas automáticos continuam demonstrativos.
+A autenticação por PIN e as operações sensíveis passam pelo Edge Function `preguica-auth`, com sessões opacas e autorização no servidor. PINs são armazenados como hashes; a chave service-role fica apenas no ambiente da Edge Function. O ecrã de login apresenta Gerência e cada perfil de colaboradora pelo nome; cada PIN identifica o respetivo perfil no servidor. Os PINs são hashes e podem ser alterados pela Gerência na gestão da equipa; o PIN nunca é validado só no browser. Na aplicação, esse perfil vê apenas HACCP e os seus submenus, fichas técnicas em consulta e stock/compras. Só a Gerência vê os restantes módulos e pode editar fichas, configurar artigos ou gerir horários, férias e equipa. Os módulos de horários, assiduidade, higienização das instalações, fornecedores e stock usam operações persistentes na base de dados. O painel apresenta os registos e tarefas operacionais pendentes para o dia.
 
 ## Equipa e horários
 

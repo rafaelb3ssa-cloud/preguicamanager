@@ -45,19 +45,15 @@ O registo persistente, responsável, data/hora, observações e produto usado s�
 
 O mapa anual semeia 1, 8, 24, 25 e 31 de dezembro de 2026 conforme indicação da Gerência. Dias 1, 8 e 25 são feriados obrigatórios no Código do Trabalho; 24 e 31 foram classificados como férias coletivas. A aplicação exporta os encerramentos do ano selecionado como `.ics` para importação na agenda.
 
-## Vercel e passos de produção
+## Publicação Vercel
 
-Não há `vercel.json`, `.vercel/project.json` ou `package.json` na pasta `Preguica_Manager_v2`. O README existente aponta para `web/index.html`, mas a raiz atualmente configurada no painel Vercel não é acessível neste repositório. Confirmar a raiz do projeto e a configuração de build diretamente no painel; não inferir que o protótipo está protegido por estar alojado na Vercel.
+O portal oficial está publicado em [preguicamanager-web.vercel.app](https://preguicamanager-web.vercel.app/), no projeto `preguicamanager-web`. O site estático tem raiz `Preguica_Manager_v2/web`; operações autenticadas passam pelo Edge Function `preguica-auth` no projeto Supabase `hmuzfvmpstejcnyiwbtx`. A publicação atual foi promovida do ramo `codex/preguica-release-20261029`. A ausência do aviso de pré-produção na interface indica que o portal está em produção; não substitui a revisão contínua de segurança e dados operacionais.
 
-Foi criado o projeto Supabase `hmuzfvmpstejcnyiwbtx` na organização “Preguiça Manager”, em Frankfurt. A cotação devolvida no momento da criação foi 0 USD/mês. A base não recebeu artigos, utilizadores laborais adicionais ou saldos inventados. Estão aplicados o esquema e as migrações de funções, higiene, férias e PIN. Os únicos perfis são Gerência e Alice. Confirmar custos atuais no painel Supabase, pois dependem do plano e utilização.
+As versões de desenvolvimento devem ser verificadas em preview antes de nova promoção. Não guardar chaves privadas no browser.
 
-A branch liga PIN/utilizadores, fichas, stock, mapa anual de encerramentos e HACCP/higiene a operações server-side com controlo por função. Horários, assiduidade e alertas continuam demonstrativos. O aviso de pré-produção permanece na aplicação. Não usar os módulos ilustrativos como registos oficiais nem promover a branch até ligar e testar os módulos ainda pendentes. O browser contém apenas a chave publicável.
+## Verificação e segurança residual
 
-As 76 fichas vindas do ZIP estão na tabela `product_recipes` e são servidas apenas a Gerência. Custos e margens continuam estimativas não confirmadas.
-
-## Verificação necessária em staging
-
-Antes da aplicação em produção, criar utilizadores de teste ligados a perfis `owner`, `manager` e `staff` e verificar:
+Verificações funcionais feitas antes da publicação e pontos de segurança a acompanhar:
 
 1. Staff consegue ler e criar registos HACCP próprios; não consegue forjar `staff_id` nem editar/apagar histórico.
 2. Staff consegue ler inventário e compras, atualizar `quantity`, e recebe erro ao tentar alterar mínimo, fornecedor, preço ou criar artigo.
