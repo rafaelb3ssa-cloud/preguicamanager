@@ -137,14 +137,14 @@ Deno.serve(async (req: Request) => {
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if(action==='onboarding:status'){
-    const revision='welcome-preguica-v1';let query=db.from('staff_onboarding_acknowledgements').select('profile_id,revision,acknowledged_at').eq('revision',revision);
+    const revision='welcome-preguica-v2';let query=db.from('staff_onboarding_acknowledgements').select('profile_id,revision,acknowledged_at').eq('revision',revision);
     if(actor.role==='staff')query=query.eq('profile_id',actor.id);
     const {data,error}=await query.order('acknowledged_at',{ascending:false});if(error)return fail('Não foi possível carregar o estado de integração.',500);
     const ids=[...new Set((data||[]).map(x=>x.profile_id))],{data:profiles}=actor.role==='staff'?await db.from('profiles').select('id,display_name').eq('id',actor.id):await db.from('profiles').select('id,display_name').eq('active',true).eq('role','staff').order('display_name');
     return reply({revision,acknowledgements:(profiles||[]).map(p=>{const ack=(data||[]).find(x=>x.profile_id===p.id);return{profile_id:p.id,display_name:p.display_name,revision,acknowledged_at:ack?.acknowledged_at||null};})});
   }
   if(action==='onboarding:acknowledge'){
-    const revision='welcome-preguica-v1';const {error}=await db.from('staff_onboarding_acknowledgements').upsert({profile_id:actor.id,revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,revision'});
+    const revision='welcome-preguica-v2';const {error}=await db.from('staff_onboarding_acknowledgements').upsert({profile_id:actor.id,revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,revision'});
     return error?fail('Não foi possível guardar a confirmação.',400):reply({ok:true,revision});
   }
 
