@@ -134,7 +134,7 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
-  const staffActions=new Set(['stock:list','stock:quantity','stock:minimum','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list']);
+  const staffActions=new Set(['stock:list','stock:quantity','stock:minimum','stock:rename','daily-orders:list','daily-orders:save','suppliers:list','attendance:list','attendance:record','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','recipes:list']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if(action==='onboarding:status'){
@@ -196,8 +196,19 @@ Deno.serve(async (req: Request) => {
     if (actor.role!=='staff'&&!canManage(actor)) return fail('Sem permissão para alterar a quantidade mínima.', 403);
     const itemId=String(body.itemId||''),minimum=Number(body.minimum);
     if(!/^[0-9a-f-]{36}$/i.test(itemId)||!Number.isFinite(minimum)||minimum<0)return fail('Quantidade mínima inválida.');
-    const {error}=await db.from('stock_items').update({minimum_quantity:minimum,updated_by:actor.id,updated_at:new Date().toISOString()}).eq('id',itemId).eq('active',true);
-    return error?fail('Não foi possível guardar o mínimo.',400):reply({ok:true});
+    const {data,error}=await db.from('stock_items').update({minimum_quantity:minimum,updated_by:actor.id,updated_at:new Date().toISOString()}).eq('id',itemId).eq('active',true).select('id').maybeSingle();
+    if(error)return fail('Não foi possível guardar o mínimo.',400);
+    if(!data)return fail('Artigo não encontrado ou inativo.',404);
+    return reply({ok:true});
+  }
+
+  if (action === 'stock:rename') {
+    const itemId=String(body.itemId||''),name=String(body.name||'').trim();
+    if(!/^[0-9a-f-]{36}$/i.test(itemId)||!name||name.length>120)return fail('Indica um nome válido para o artigo.');
+    const {data,error}=await db.from('stock_items').update({name,updated_by:actor.id,updated_at:new Date().toISOString()}).eq('id',itemId).eq('active',true).select('id').maybeSingle();
+    if(error)return fail('Não foi possível guardar o nome do artigo.',400);
+    if(!data)return fail('Artigo não encontrado ou inativo.',404);
+    return reply({ok:true});
   }
 
   if (action.startsWith('inventory:monthly:')) {
@@ -257,8 +268,8 @@ Deno.serve(async (req: Request) => {
   if (action === 'suppliers:save') {
     if (!canManage(actor)) return fail('Só a gerência pode editar fornecedores.', 403);
     const s = body.supplier && typeof body.supplier === 'object' ? body.supplier as Record<string, unknown> : {};
-    const name = String(s.name || '').trim(), orderDay = Number(s.order_weekday), deliveryDay = s.delivery_weekday===null||s.delivery_weekday===''?null:Number(s.delivery_weekday);
-    if (!name || name.length > 120 || !Number.isInteger(orderDay) || orderDay < 1 || orderDay > 7 || (deliveryDay!==null&&(!Number.isInteger(deliveryDay)||deliveryDay<1||deliveryDay>7))) return fail('Confirma os dados do fornecedor.');
+    const name = String(s.name || '').trim(), orderDay = s.order_weekday===null||s.order_weekday===''?null:Number(s.order_weekday), deliveryDay = s.delivery_weekday===null||s.delivery_weekday===''?null:Number(s.delivery_weekday);
+    if (!name || name.length > 120 || (orderDay!==null&&(!Number.isInteger(orderDay)||orderDay<1||orderDay>7)) || (deliveryDay!==null&&(!Number.isInteger(deliveryDay)||deliveryDay<1||deliveryDay>7))) return fail('Confirma os dados do fornecedor.');
     const { error } = await db.from('suppliers').upsert({ name, phone: String(s.phone || '').trim().slice(0,40) || null, order_weekday: orderDay, delivery_weekday: deliveryDay, updated_at: new Date().toISOString() }, { onConflict: 'name' });
     return error ? fail('Não foi possível guardar o fornecedor.', 400) : reply({ ok: true });
   }
@@ -568,13 +579,13 @@ Deno.serve(async (req: Request) => {
   }
 
   if (action === 'recipes:list') {
-    const fields=actor.role==='staff'?'id,name,category,ingredients,method,active':'id,name,category,sale_price_inc_vat,ingredient_cost_ex_vat,ingredients,method,active';
+    const fields=actor.role==='staff'?'id,name,category,ingredients,method,allergens,active':'id,name,category,sale_price_inc_vat,ingredient_cost_ex_vat,ingredients,method,allergens,active';
     const { data, error } = await db.from('product_recipes').select(fields).eq('active', true).order('category').order('name');
     if (error) return fail('Não foi possível carregar as fichas técnicas.', 500);
     const recipes = (data || []).map((r) => ({
       id: r.id, name: r.name, category: r.category,
       ...(actor.role==='staff'?{}:{sale:Number(r.sale_price_inc_vat),cost:Number(r.ingredient_cost_ex_vat)}),
-      ingredients: Array.isArray(r.ingredients) ? r.ingredients.join('; ') : String(r.ingredients || ''), method: r.method || '',
+      ingredients: Array.isArray(r.ingredients) ? r.ingredients.join('; ') : String(r.ingredients || ''), method: r.method || '', allergens: Array.isArray(r.allergens) ? r.allergens : [],
     }));
     return reply({ recipes });
   }
@@ -584,8 +595,10 @@ Deno.serve(async (req: Request) => {
     const r = (body.recipe && typeof body.recipe === 'object' ? body.recipe : {}) as Record<string, unknown>;
     const name = String(r.name || '').trim(), sale = Number(r.sale), cost = Number(r.cost);
     if (!name || name.length > 160 || !Number.isFinite(sale) || sale < 0 || !Number.isFinite(cost) || cost < 0) return fail('Confirma o nome e os valores da ficha.');
+    const allergens=Array.isArray(r.allergens)?r.allergens.map(x=>String(x).trim()).filter(Boolean):String(r.allergens||'').split(/[;,\\n]/).map(x=>x.trim()).filter(Boolean);
+    if(allergens.length>30||allergens.some(x=>x.length>80))return fail('Revê a lista de alergénios (máximo de 30 itens).');
     const record = { name, category: String(r.category || '').slice(0, 100), sale_price_inc_vat: sale, ingredient_cost_ex_vat: cost,
-      ingredients: [String(r.ingredients || '')], method: String(r.method || '').slice(0, 4000), active: true, updated_by: actor.id, updated_at: new Date().toISOString() };
+      ingredients: [String(r.ingredients || '')], method: String(r.method || '').slice(0, 4000), allergens, active: true, updated_by: actor.id, updated_at: new Date().toISOString() };
     const existingName = String(body.existingName || '').trim();
     const { error } = existingName && existingName !== name
       ? await db.from('product_recipes').update(record).eq('name', existingName)
