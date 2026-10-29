@@ -19,7 +19,7 @@ const randomToken = () => {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 };
-type Profile = { id: string; display_name: string; role: 'owner' | 'manager' | 'staff'; active: boolean };
+type Profile = { id: string; display_name: string; role: 'owner' | 'manager' | 'staff'; active: boolean; activity_exempt: boolean };
 
 async function currentProfile(req: Request): Promise<Profile | null> {
   const token = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || '';
@@ -27,11 +27,65 @@ async function currentProfile(req: Request): Promise<Profile | null> {
   const { data: session } = await db.from('app_sessions').select('profile_id, expires_at')
     .eq('token_hash', await sha(token)).gt('expires_at', new Date().toISOString()).maybeSingle();
   if (!session) return null;
-  const { data } = await db.from('profiles').select('id,display_name,role,active').eq('id', session.profile_id).eq('active', true).maybeSingle();
+  const { data } = await db.from('profiles').select('id,display_name,role,active,activity_exempt').eq('id', session.profile_id).eq('active', true).maybeSingle();
   return data as Profile | null;
 }
 const canManage = (profile: Profile) => profile.role === 'owner' || profile.role === 'manager';
 const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+const dateInTimezone = (value: string | Date, timeZone = 'Europe/Lisbon') => {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
+  const part = (type: string) => parts.find(x => x.type === type)?.value || '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+};
+const lisbonToday = () => dateInTimezone(new Date());
+const shiftIsoDate = (value: string, days: number) => { const d = new Date(`${value}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0,10); };
+const mondayOf = (value: string) => shiftIsoDate(value, -((new Date(`${value}T12:00:00Z`).getUTCDay() + 6) % 7));
+async function pagedRows<T>(makeQuery: (from: number, to: number) => any): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; from < 50000; from += 1000) {
+    const { data, error } = await makeQuery(from, from + 999);
+    if (error) throw error;
+    const page = (data || []) as T[];
+    rows.push(...page);
+    if (page.length < 1000) return rows;
+  }
+  throw new Error('A consulta excedeu o limite de segurança.');
+}
+async function eligibleActivityDays(profiles: Array<{id:string}>, fromDate: string, toDate: string): Promise<Set<string>> {
+  const eligible = new Set<string>();
+  if (!profiles.length || fromDate > toDate) return eligible;
+  const staffIds = profiles.map(p => p.id);
+  const schedules = await pagedRows<{id:string;week_start:string;version:number}>((from,to)=>db.from('weekly_schedules').select('id,week_start,version').eq('status','published').gte('week_start',mondayOf(fromDate)).lte('week_start',toDate).order('week_start',{ascending:true}).order('version',{ascending:false}).range(from,to));
+  const latest = new Map<string,string>();
+  for (const schedule of schedules) if (!latest.has(schedule.week_start)) latest.set(schedule.week_start,schedule.id);
+  const scheduleIds = [...latest.values()];
+  const shifts: Array<{staff_id:string;shift_date:string}> = [];
+  for (let i=0;i<scheduleIds.length;i+=100) {
+    const batch=scheduleIds.slice(i,i+100);
+    shifts.push(...await pagedRows<{staff_id:string;shift_date:string}>((from,to)=>db.from('shifts').select('staff_id,shift_date').in('schedule_id',batch).in('staff_id',staffIds).gte('shift_date',fromDate).lte('shift_date',toDate).order('shift_date').range(from,to)));
+  }
+  for (const shift of shifts) eligible.add(`${shift.staff_id}|${String(shift.shift_date).slice(0,10)}`);
+  const leaveRows=await pagedRows<{staff_id:string;start_date:string;end_date:string}>((from,to)=>db.from('leave_requests').select('staff_id,start_date,end_date').in('staff_id',staffIds).eq('status','approved').is('cancelled_at',null).lte('start_date',toDate).gte('end_date',fromDate).range(from,to));
+  const leaveDays=new Set<string>();
+  for(const leave of leaveRows){const first=String(leave.start_date).slice(0,10)<fromDate?fromDate:String(leave.start_date).slice(0,10),last=String(leave.end_date).slice(0,10)>toDate?toDate:String(leave.end_date).slice(0,10);for(let day=first;day<=last;day=shiftIsoDate(day,1))leaveDays.add(`${leave.staff_id}|${day}`)}
+  const widenedFrom=shiftIsoDate(fromDate,-1), widenedTo=shiftIsoDate(toDate,2);
+  const absences=await pagedRows<{staff_id:string;occurred_at:string}>((from,to)=>db.from('attendance_records').select('staff_id,occurred_at').in('staff_id',staffIds).in('kind',['absence','medical_leave']).gte('occurred_at',`${widenedFrom}T00:00:00Z`).lt('occurred_at',`${widenedTo}T00:00:00Z`).range(from,to));
+  const absenceDays=new Set<string>();
+  for(const absence of absences){const day=dateInTimezone(absence.occurred_at);if(day>=fromDate&&day<=toDate)absenceDays.add(`${absence.staff_id}|${day}`)}
+  for(const key of leaveDays)eligible.delete(key);
+  for(const key of absenceDays)eligible.delete(key);
+  return eligible;
+}
+async function missingActivityDays(profiles:Array<{id:string;display_name:string;activity_exempt:boolean}>,fromDate:string,toDate:string){
+  const required=profiles.filter(p=>!p.activity_exempt);
+  const eligible=await eligibleActivityDays(required,fromDate,toDate);
+  if(!eligible.size)return [];
+  const submitted=await pagedRows<{staff_id:string;activity_date:string}>((from,to)=>db.from('staff_activity_logs').select('staff_id,activity_date').in('staff_id',required.map(p=>p.id)).eq('status','submitted').gte('activity_date',fromDate).lte('activity_date',toDate).range(from,to));
+  const completed=new Set(submitted.map(x=>`${x.staff_id}|${String(x.activity_date).slice(0,10)}`));
+  const names=new Map(required.map(p=>[p.id,p.display_name]));
+  return [...eligible].filter(key=>!completed.has(key)).map(key=>{const [staff_id,activity_date]=key.split('|');return {staff_id,display_name:names.get(staff_id)||'—',activity_date,status:activity_date===lisbonToday()?'today':'overdue'}}).sort((a,b)=>a.activity_date.localeCompare(b.activity_date)||a.display_name.localeCompare(b.display_name,'pt-PT'));
+}
+
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: cors });
@@ -62,7 +116,7 @@ Deno.serve(async (req: Request) => {
       return fail('PIN incorreto.', 401);
     }
     await db.rpc('record_pin_login_attempt', { p_attempt_key: attemptKey, p_success: true });
-    const { data: profile, error } = await db.from('profiles').select('id,display_name,role,active').eq('id', profileId).eq('active', true).single();
+    const { data: profile, error } = await db.from('profiles').select('id,display_name,role,active,activity_exempt').eq('id', profileId).eq('active', true).single();
     if (error || !profile) return fail('Utilizador indisponível.', 401);
     const token = randomToken();
     const { error: sessionError } = await db.from('app_sessions').insert({ token_hash: await sha(token), profile_id: profile.id, expires_at: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString() });
@@ -79,12 +133,12 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
-  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','recipes:list']);
+  const staffActions=new Set(['stock:list','stock:quantity','daily-orders:list','daily-orders:save','suppliers:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','activity:pending','activity:logs:list','activity:save-draft','activity:submit']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   if (action === 'stock:list') {
     const { data, error } = await db.from('stock_items').select('id,name,category,unit,quantity,minimum_quantity,supplier_name,unit_cost_ex_vat,active').eq('active', true).order('category').order('name');
-    return error ? fail('Não foi possível carregar o inventário.', 500) : reply({ items: data || [] });
+    return error ? fail('Não foi possível carregar o inventário.', 500) : reply({ items: (data || []).map(({unit_cost_ex_vat,...item})=>actor.role==='staff'?item:{...item,unit_cost_ex_vat}) });
   }
   if (action === 'stock:quantity') {
     const quantity = Number(body.quantity), id = String(body.itemId || '');
@@ -221,6 +275,74 @@ Deno.serve(async (req: Request) => {
     const revision='cafe-preguica-haccp-manual-v1';
     const {error}=await db.from('haccp_training_acknowledgements').upsert({profile_id:actor.id,manual_revision:revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,manual_revision'});
     return error?fail('Não foi possível registar a confirmação.',400):reply({ok:true});
+  }
+
+  if (action.startsWith('activity:')) {
+    const today=lisbonToday();
+    const settingsResult=await db.from('activity_requirement_settings').select('start_date').eq('singleton',true).single();
+    if(settingsResult.error)return fail('Não foi possível carregar a data inicial do registo de atividade.',500);
+    const startDate=String(settingsResult.data.start_date).slice(0,10);
+    if(action==='activity:settings'){
+      if(!canManage(actor))return fail('Só a Gerência pode alterar a data inicial.',403);
+      if(typeof body.startDate==='string'){
+        const date=String(body.startDate);
+        if(!validDate(date)||date>today)return fail('A data inicial tem de ser válida e não pode ser futura.');
+        const {error}=await db.from('activity_requirement_settings').update({start_date:date,updated_by:actor.id,updated_at:new Date().toISOString()}).eq('singleton',true);
+        if(error)return fail('Não foi possível guardar a data inicial.',400);
+        return reply({startDate:date});
+      }
+      return reply({startDate});
+    }
+    if(action==='activity:pending'){
+      let profiles:Array<{id:string;display_name:string;activity_exempt:boolean}>;
+      if(actor.role==='staff'){
+        const {data,error}=await db.from('profiles').select('id,display_name,activity_exempt').eq('id',actor.id).eq('active',true).single();
+        if(error||!data)return fail('Não foi possível carregar o teu perfil.',500);
+        profiles=[data];
+      }else{
+        let q=db.from('profiles').select('id,display_name,activity_exempt').eq('role','staff').order('display_name');
+        const filterId=String(body.staffId||'');
+        if(filterId){if(!/^[0-9a-f-]{36}$/i.test(filterId))return fail('Colaboradora inválida.');q=q.eq('id',filterId)}
+        const {data,error}=await q;if(error)return fail('Não foi possível carregar a equipa.',500);profiles=data||[];
+      }
+      const fromInput=String(body.from||startDate),toInput=String(body.to||today);
+      if(!validDate(fromInput)||!validDate(toInput))return fail('Indica um intervalo de datas válido.');
+      const fromDate=fromInput<startDate?startDate:fromInput,toDate=toInput>today?today:toInput;
+      const pending=fromDate<=toDate?await missingActivityDays(profiles,fromDate,toDate):[];
+      return reply({today,startDate,required:actor.role==='staff'?!Boolean(profiles[0]?.activity_exempt):null,exempt:actor.role==='staff'?Boolean(profiles[0]?.activity_exempt):false,staff:actor.role==='staff'?[]:profiles.map(p=>({id:p.id,display_name:p.display_name,activity_exempt:p.activity_exempt})),pending});
+    }
+    if(action==='activity:logs:list'){
+      const from=String(body.from||startDate),to=String(body.to||today);
+      if(!validDate(from)||!validDate(to)||from>to)return fail('Indica um intervalo de datas válido.');
+      let staffIds:string[]=[];
+      if(actor.role==='staff')staffIds=[actor.id];
+      else if(body.staffId){const id=String(body.staffId);if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Colaboradora inválida.');const {data:profile}=await db.from('profiles').select('id').eq('id',id).eq('role','staff').maybeSingle();if(!profile)return fail('Colaboradora não encontrada.',404);staffIds=[id]}
+      else {const {data:profiles,error}=await db.from('profiles').select('id').eq('role','staff');if(error)return fail('Não foi possível carregar a equipa.',500);staffIds=(profiles||[]).map(p=>p.id)}
+      if(!staffIds.length)return reply({logs:[]});
+      const logs=await pagedRows<{id:string;staff_id:string;activity_date:string;activity_summary:string|null;handover_notes:string|null;status:string;submitted_at:string|null;updated_at:string}>((fromRow,toRow)=>db.from('staff_activity_logs').select('id,staff_id,activity_date,activity_summary,handover_notes,status,submitted_at,updated_at').in('staff_id',staffIds).gte('activity_date',from).lte('activity_date',to).order('activity_date',{ascending:false}).range(fromRow,toRow));
+      if(actor.role==='staff')return reply({logs});
+      const {data:names}=await db.from('profiles').select('id,display_name').in('id',staffIds);
+      const lookup=new Map((names||[]).map(p=>[p.id,p.display_name]));
+      return reply({logs:logs.map(x=>({...x,display_name:lookup.get(x.staff_id)||'—'}))});
+    }
+    if(action==='activity:save-draft'||action==='activity:submit'){
+      if(actor.role!=='staff')return fail('Os registos são submetidos pela própria colaboradora.',403);
+      const date=String(body.activityDate||'');
+      if(!validDate(date)||date<startDate||date>today)return fail('A data tem de estar dentro do período da obrigação e não pode ser futura.');
+      const summary=String(body.activitySummary||'').trim(),handover=String(body.handoverNotes||'').trim();
+      if(summary.length>5000||handover.length>5000)return fail('O texto excede o limite de 5000 caracteres.');
+      if(action==='activity:submit'&&(summary.length<5||handover.length<5))return fail('Preenche as atividades realizadas e o estado/ocorrências do turno. Se não houve ocorrências, escreve “Sem ocorrências”.');
+      const eligible=await eligibleActivityDays([{id:actor.id}],date,date);
+      if(!eligible.has(`${actor.id}|${date}`))return fail('Não há um turno publicado para essa data, ou existe uma ausência aprovada registada.');
+      const {data:existing,error:existingError}=await db.from('staff_activity_logs').select('id,status').eq('staff_id',actor.id).eq('activity_date',date).maybeSingle();
+      if(existingError)return fail('Não foi possível validar o registo existente.',500);
+      if(existing?.status==='submitted')return fail('Este registo já foi submetido e não pode ser substituído.',409);
+      const submitted=action==='activity:submit',now=new Date().toISOString();
+      const values={activity_summary:summary||null,handover_notes:handover||null,status:submitted?'submitted':'draft',submitted_at:submitted?now:null,submitted_by:submitted?actor.id:null,updated_at:now};
+      const result=existing?await db.from('staff_activity_logs').update(values).eq('id',existing.id).eq('status','draft').select('id').single():await db.from('staff_activity_logs').insert({staff_id:actor.id,activity_date:date,...values}).select('id').single();
+      if(result.error)return fail('Não foi possível guardar o registo.',400);
+      return reply({ok:true,status:submitted?'submitted':'draft',activityDate:date,submittedAt:submitted?now:null});
+    }
   }
 
   if (action === 'haccp:list') {
