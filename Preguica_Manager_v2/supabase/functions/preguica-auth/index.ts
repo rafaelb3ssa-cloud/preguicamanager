@@ -287,16 +287,20 @@ Deno.serve(async (req: Request) => {
   if (action === 'attendance:record') {
     if(actor.role!=='staff')return fail('A assiduidade é registada pela própria colaboradora. A Gerência valida e corrige no histórico.',403);
     const kind=String(body.kind||''), at=String(body.occurredAt||''),shiftId=String(body.shiftId||'');
-    if(!['clock_in','clock_out','absence','medical_leave','vacation'].includes(kind)||Number.isNaN(Date.parse(at))||Date.parse(at)>Date.now())return fail('Indica tipo, data e hora válidos.');
-    if(!/^[0-9a-f-]{36}$/i.test(shiftId))return fail('Abre um turno publicado antes de registar a assiduidade.');
-    const {data:shift,error:shiftError}=await db.from('shifts').select('id,schedule_id,staff_id,shift_date').eq('id',shiftId).eq('staff_id',actor.id).maybeSingle();if(shiftError||!shift)return fail('Só podes registar ocorrências nos teus próprios turnos.',403);
-    const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('id',shift.schedule_id).eq('status','published').maybeSingle();if(scheduleError||!schedule)return fail('Este turno ainda não foi publicado.',403);
-    const startOfShift=Date.parse(`${shift.shift_date}T00:00:00Z`),occurred=Date.parse(at),dayOfEvent=new Date(`${dateInTimezone(at)}T00:00:00Z`).getTime();if(dayOfEvent<startOfShift||dayOfEvent>startOfShift+86400000)return fail('A ocorrência tem de pertencer ao dia do turno ou à manhã seguinte.');
-    const {data:prior,error:priorError}=await db.from('attendance_records').select('id,kind,status').eq('shift_id',shiftId).eq('staff_id',actor.id).neq('status','rejected');if(priorError)return fail('Não foi possível validar os registos deste turno.',500);
-    if(['clock_in','absence','medical_leave','vacation'].includes(kind)&&prior?.some(x=>['clock_in','absence','medical_leave','vacation'].includes(x.kind)))return fail('Já existe uma entrada ou ocorrência registada para este turno.');
-    if(kind==='clock_out'&&!prior?.some(x=>x.kind==='clock_in'))return fail('Regista primeiro a entrada deste turno.');
-    if(kind==='clock_out'&&prior?.some(x=>x.kind==='clock_out'))return fail('A saída deste turno já foi registada.');
-    const {error}=await db.from('attendance_records').insert({staff_id:actor.id,shift_id:shiftId,submitted_by:actor.id,kind,occurred_at:new Date(occurred).toISOString(),note:String(body.note||'').slice(0,1000),status:'pending'});
+    if(!['clock_in','clock_out','late','early_departure','absence','medical_leave','vacation'].includes(kind)||Number.isNaN(Date.parse(at))||Date.parse(at)>Date.now())return fail('Indica tipo, data e hora válidos.');
+    let linkedShiftId:string|null=null;
+    if(shiftId){
+      if(!/^[0-9a-f-]{36}$/i.test(shiftId))return fail('Turno inválido.');
+      const {data:shift,error:shiftError}=await db.from('shifts').select('id,schedule_id,staff_id,shift_date').eq('id',shiftId).eq('staff_id',actor.id).maybeSingle();if(shiftError||!shift)return fail('Só podes registar ocorrências nos teus próprios turnos.',403);
+      const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('id',shift.schedule_id).eq('status','published').maybeSingle();if(scheduleError||!schedule)return fail('Este turno ainda não foi publicado.',403);
+      const startOfShift=Date.parse(`${shift.shift_date}T00:00:00Z`),dayOfEvent=new Date(`${dateInTimezone(at)}T00:00:00Z`).getTime();if(dayOfEvent<startOfShift||dayOfEvent>startOfShift+86400000)return fail('A ocorrência tem de pertencer ao dia do turno ou à manhã seguinte.');
+      const {data:prior,error:priorError}=await db.from('attendance_records').select('id,kind,status').eq('shift_id',shiftId).eq('staff_id',actor.id).neq('status','rejected');if(priorError)return fail('Não foi possível validar os registos deste turno.',500);
+      if(['clock_in','absence','medical_leave','vacation'].includes(kind)&&prior?.some(x=>['clock_in','absence','medical_leave','vacation'].includes(x.kind)))return fail('Já existe uma entrada ou ocorrência registada para este turno.');
+      if(kind==='clock_out'&&!prior?.some(x=>x.kind==='clock_in'))return fail('Regista primeiro a entrada deste turno.');
+      if(kind==='clock_out'&&prior?.some(x=>x.kind==='clock_out'))return fail('A saída deste turno já foi registada.');
+      linkedShiftId=shift.id;
+    }
+    const {error}=await db.from('attendance_records').insert({staff_id:actor.id,shift_id:linkedShiftId,submitted_by:actor.id,kind,occurred_at:new Date(at).toISOString(),note:String(body.note||'').slice(0,1000),status:'pending'});
     return error?fail('Não foi possível guardar a assiduidade.',400):reply({ok:true});
   }
   if (action === 'attendance:note') {
@@ -316,8 +320,9 @@ Deno.serve(async (req: Request) => {
     const week=String(body.weekStart||''); if(!validDate(week))return fail('Indica a segunda-feira da semana.');
     const {data:schedules,error}=await db.from('weekly_schedules').select('id,week_start,version,status,published_at,accumulated_hours').eq('week_start',week).in('status',actor.role==='staff'?['published']:['draft','published']).order('version',{ascending:false}).limit(1);
     if(error)return fail('Não foi possível carregar o horário.',500); const schedule=schedules?.[0];
-    let profileQuery=db.from('profiles').select('id,display_name,weekly_hours').eq('active',true).eq('role','staff').order('display_name');if(actor.role==='staff')profileQuery=profileQuery.eq('id',actor.id);
-    let shiftQuery=schedule?db.from('shifts').select('id,staff_id,shift_date,starts_at,ends_at,break_minutes,notes').eq('schedule_id',schedule.id).order('shift_date'):null;if(shiftQuery&&actor.role==='staff')shiftQuery=shiftQuery.eq('staff_id',actor.id);
+    // Staff may view the full published team schedule; draft schedules remain manager-only.
+    let profileQuery=db.from('profiles').select('id,display_name,weekly_hours').eq('active',true).eq('role','staff').order('display_name');
+    let shiftQuery=schedule?db.from('shifts').select('id,staff_id,shift_date,starts_at,ends_at,break_minutes,notes').eq('schedule_id',schedule.id).order('shift_date'):null;
     const [profiles,shifts]=await Promise.all([profileQuery,shiftQuery||Promise.resolve({data:[],error:null})]);
     const {data:allSchedules,error:allError}=await db.from('weekly_schedules').select('id,week_start,version,accumulated_hours').eq('status','published').lte('week_start',week).order('week_start',{ascending:true}).order('version',{ascending:false});
     if(allError)return fail('Não foi possível calcular as horas acumuladas.',500);
