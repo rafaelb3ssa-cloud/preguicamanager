@@ -207,12 +207,12 @@ Deno.serve(async (req: Request) => {
     if(action==='inventory:monthly:get'){
       const {data,error}=await db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').eq('inventory_month',inventoryMonth).maybeSingle();
       if(error)return fail('Não foi possível carregar o inventário mensal.',500);
-      const today=lisbonToday(),canStart=today.slice(0,7)===month&&Number(today.slice(8,10))<=14;
+      const today=lisbonToday(),canStart=today.slice(0,7)===month&&Number(today.slice(8,10))<=7;
       return reply({count:data||null,canStart});
     }
     if(action==='inventory:monthly:start'){
       const today=lisbonToday();
-      if(today.slice(0,7)!==month||Number(today.slice(8,10))>14)return fail('A contagem mensal só pode ser iniciada entre os dias 1 e 14 do mês selecionado.');
+      if(today.slice(0,7)!==month||Number(today.slice(8,10))>7)return fail('A contagem mensal só pode ser iniciada durante a primeira semana (dias 1 a 7) do mês selecionado.');
       const {data:existing,error:readError}=await db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').eq('inventory_month',inventoryMonth).maybeSingle();
       if(readError)return fail('Não foi possível verificar a contagem mensal.',500);
       if(existing)return reply({count:existing,alreadyStarted:true});
