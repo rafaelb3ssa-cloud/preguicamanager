@@ -370,3 +370,17 @@ ALTER TABLE public.supplier_order_sheets ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.supplier_order_sheets FROM anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.supplier_order_sheets TO service_role;
 COMMENT ON TABLE public.supplier_order_sheets IS 'Shared current supplier order sheets; access is mediated by the authenticated Preguica Edge Function.';
+
+
+-- Append-only audit trail of team saves to the shared supplier order sheets.
+CREATE TABLE public.supplier_order_sheet_history (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  changed_by uuid NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
+  supplier_keys text[] NOT NULL DEFAULT '{}',
+  line_count integer NOT NULL DEFAULT 0 CHECK (line_count >= 0),
+  saved_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX supplier_order_sheet_history_saved_at_idx ON public.supplier_order_sheet_history (saved_at DESC);
+ALTER TABLE public.supplier_order_sheet_history ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.supplier_order_sheet_history FROM anon, authenticated;
+GRANT SELECT, INSERT ON TABLE public.supplier_order_sheet_history TO service_role;
