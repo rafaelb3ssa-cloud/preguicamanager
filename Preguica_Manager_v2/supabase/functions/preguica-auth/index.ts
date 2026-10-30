@@ -41,7 +41,7 @@ const lisbonToday = () => dateInTimezone(new Date());
 const timeInTimezone = (value: string | Date, timeZone = 'Europe/Lisbon') => new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(value));
 const lisbonWallClockToISO = (value: string) => {
   const match=value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/);if(!match)return '';
-  const [date,time]=match, [year,month,day]=date.split('-').map(Number), [hour,minute]=time.split(':').map(Number), wall=Date.UTC(year,month-1,day,hour,minute);let instant=wall;
+  const [,date,time]=match, [year,month,day]=date.split('-').map(Number), [hour,minute]=time.split(':').map(Number), wall=Date.UTC(year,month-1,day,hour,minute);let instant=wall;
   for(let i=0;i<3;i++){const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Lisbon',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(instant)),get=(type:string)=>Number(parts.find(part=>part.type===type)?.value||0),shown=Date.UTC(get('year'),get('month')-1,get('day'),get('hour'),get('minute'));instant+=wall-shown;}
   return new Date(instant).toISOString();
 };
@@ -149,7 +149,7 @@ Deno.serve(async (req: Request) => {
     const {error}=await db.rpc('change_profile_pin',{p_profile_id:actor.id,p_pin:newPin});
     return error?fail('Não foi possível alterar o PIN.',400):reply({ok:true});
   }
-  const staffActions=new Set(['pin:change','suppliers:list','supplier-orders:list','supplier-orders:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save']);
+  const staffActions=new Set(['pin:change','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
   if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
   if(actor.role==='staff'&&!actor.attendance_access&&action.startsWith('attendance:'))return fail('Este perfil não tem acesso ao registo de assiduidade.',403);
@@ -307,14 +307,27 @@ Deno.serve(async (req: Request) => {
 
   if (action === 'supplier-orders:list') {
     const date=String(body.date||dateInTimezone(new Date().toISOString()));
-    if(!validDate(date)||date!==dateInTimezone(new Date().toISOString()))return fail('Só é possível consultar a lista de encomendas de hoje.');
+    if(!validDate(date)||date!==dateInTimezone(new Date().toISOString()))return fail('Só é possível consultar encomendas e entregas de hoje.');
     const day=new Date(`${date}T12:00:00Z`),weekday=((day.getUTCDay()+6)%7)+1;
-    const {data:suppliers,error:supplierError}=await db.from('suppliers').select('id,name,phone,order_weekday,delivery_weekday').eq('active',true).eq('order_weekday',weekday).order('name');
-    if(supplierError)return fail('Não foi possível carregar as encomendas previstas.',500);
-    const ids=(suppliers||[]).map(x=>x.id);const {data:checks,error:checksError}=ids.length?await db.from('supplier_order_checks').select('supplier_id,completed_by,completed_at').eq('order_date',date).in('supplier_id',ids):{data:[],error:null};
-    if(checksError)return fail('Não foi possível carregar as confirmações das encomendas.',500);
-    const profileIds=[...new Set((checks||[]).map(x=>x.completed_by))],{data:profiles}=profileIds.length?await db.from('profiles').select('id,display_name').in('id',profileIds):{data:[]};
-    return reply({orders:(suppliers||[]).map(s=>{const check=(checks||[]).find(x=>x.supplier_id===s.id);return{...s,completed_at:check?.completed_at||null,completed_by_name:(profiles||[]).find(p=>p.id===check?.completed_by)?.display_name||null}})});
+    const [{data:orders,error:orderError},{data:deliveries,error:deliveryError}]=await Promise.all([
+      db.from('suppliers').select('id,name,phone,order_weekday,delivery_weekday').eq('active',true).eq('order_weekday',weekday).order('name'),
+      db.from('suppliers').select('id,name,phone,order_weekday,delivery_weekday').eq('active',true).eq('delivery_weekday',weekday).order('name'),
+    ]);
+    if(orderError||deliveryError)return fail('Não foi possível carregar encomendas e entregas previstas.',500);
+    const orderIds=(orders||[]).map(x=>x.id),deliveryIds=(deliveries||[]).map(x=>x.id);
+    const [{data:orderChecks,error:orderChecksError},{data:deliveryChecks,error:deliveryChecksError}]=await Promise.all([
+      orderIds.length?db.from('supplier_order_checks').select('supplier_id,completed_by,completed_at').eq('order_date',date).in('supplier_id',orderIds):Promise.resolve({data:[],error:null}),
+      deliveryIds.length?db.from('supplier_delivery_checks').select('id,supplier_id,status,observations,checked_by,checked_at').eq('delivery_date',date).in('supplier_id',deliveryIds).order('checked_at',{ascending:false}):Promise.resolve({data:[],error:null}),
+    ]);
+    if(orderChecksError||deliveryChecksError)return fail('Não foi possível carregar os carimbos de encomenda e receção.',500);
+    const profileIds=[...new Set([...(orderChecks||[]).map(x=>x.completed_by),...(deliveryChecks||[]).map(x=>x.checked_by)])];
+    const {data:profiles}=profileIds.length?await db.from('profiles').select('id,display_name').in('id',profileIds):{data:[]};
+    const profileName=(id:string)=> (profiles||[]).find(p=>p.id===id)?.display_name||'equipa';
+    const latestDelivery=new Map<string,any>();for(const check of deliveryChecks||[])if(!latestDelivery.has(check.supplier_id))latestDelivery.set(check.supplier_id,check);
+    return reply({
+      orders:(orders||[]).map(s=>{const check=(orderChecks||[]).find(x=>x.supplier_id===s.id);return{...s,completed_at:check?.completed_at||null,completed_by_name:check?profileName(check.completed_by):null}}),
+      deliveries:(deliveries||[]).map(s=>{const check=latestDelivery.get(s.id);return{...s,receipt:check?{id:check.id,status:check.status,observations:check.observations,checked_at:check.checked_at,checked_by_name:profileName(check.checked_by)}:null}}),
+    });
   }
   if (action === 'supplier-orders:mark') {
     const supplierId=String(body.supplierId||''),date=String(body.date||dateInTimezone(new Date().toISOString()));
@@ -325,6 +338,16 @@ Deno.serve(async (req: Request) => {
     const {error}=await db.from('supplier_order_checks').insert({supplier_id:supplierId,order_date:date,completed_by:actor.id,completed_at:new Date().toISOString()});
     if(error)return fail(error.code==='23505'?'Esta encomenda já foi carimbada hoje.':'Não foi possível carimbar a encomenda.',error.code==='23505'?409:400);
     return reply({ok:true});
+  }
+  if (action === 'supplier-deliveries:mark') {
+    const supplierId=String(body.supplierId||''),date=String(body.date||dateInTimezone(new Date().toISOString())),status=String(body.status||''),observations=String(body.observations||'').trim().slice(0,800);
+    if(!/^[0-9a-f-]{36}$/i.test(supplierId)||!validDate(date)||date!==dateInTimezone(new Date().toISOString())||!['received_ok','not_arrived','condition_issue'].includes(status))return fail('Confirma o fornecedor, a data e o estado da entrega.');
+    if(status!=='received_ok'&&!observations)return fail('Acrescenta uma nota quando a entrega não chegou ou o produto não estava em condições.');
+    const day=new Date(`${date}T12:00:00Z`),weekday=((day.getUTCDay()+6)%7)+1;
+    const {data:supplier,error:supplierError}=await db.from('suppliers').select('id').eq('id',supplierId).eq('active',true).eq('delivery_weekday',weekday).maybeSingle();
+    if(supplierError||!supplier)return fail('Este fornecedor não tem entrega prevista para hoje.',403);
+    const {error}=await db.from('supplier_delivery_checks').insert({supplier_id:supplierId,delivery_date:date,status,observations,checked_by:actor.id,checked_at:new Date().toISOString()});
+    return error?fail('Não foi possível registar a receção.',400):reply({ok:true});
   }
 
   if (action === 'suppliers:list') {
