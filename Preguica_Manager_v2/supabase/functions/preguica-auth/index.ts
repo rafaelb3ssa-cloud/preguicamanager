@@ -149,7 +149,7 @@ Deno.serve(async (req: Request) => {
     const {error}=await db.rpc('change_profile_pin',{p_profile_id:actor.id,p_pin:newPin});
     return error?fail('Não foi possível alterar o PIN.',400):reply({ok:true});
   }
-  const staffActions=new Set(['pin:change','suppliers:list','supplier-orders:list','supplier-orders:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list']);
+  const staffActions=new Set(['pin:change','suppliers:list','supplier-orders:list','supplier-orders:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
   if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
   if(actor.role==='staff'&&!actor.attendance_access&&action.startsWith('attendance:'))return fail('Este perfil não tem acesso ao registo de assiduidade.',403);
@@ -676,20 +676,49 @@ Deno.serve(async (req: Request) => {
     return reply({ recipes });
   }
 
-  if (action === 'recipes:save') {
-    if (!canManage(actor)) return fail('Sem permissões para alterar fichas técnicas.', 403);
-    const r = (body.recipe && typeof body.recipe === 'object' ? body.recipe : {}) as Record<string, unknown>;
-    const name = String(r.name || '').trim(), sale = Number(r.sale), cost = Number(r.cost);
-    if (!name || name.length > 160 || !Number.isFinite(sale) || sale < 0 || !Number.isFinite(cost) || cost < 0) return fail('Confirma o nome e os valores da ficha.');
-    const allergens=Array.isArray(r.allergens)?r.allergens.map(x=>String(x).trim()).filter(Boolean):String(r.allergens||'').split(/[;,\\n]/).map(x=>x.trim()).filter(Boolean);
-    if(allergens.length>30||allergens.some(x=>x.length>80))return fail('Revê a lista de alergénios (máximo de 30 itens).');
-    const record = { name, category: String(r.category || '').slice(0, 100), sale_price_inc_vat: sale, ingredient_cost_ex_vat: cost,
-      ingredients: [String(r.ingredients || '')], method: String(r.method || '').slice(0, 4000), history:String(r.history||'').slice(0,1600), allergens, active: true, updated_by: actor.id, updated_at: new Date().toISOString() };
-    const existingName = String(body.existingName || '').trim();
-    const { error } = existingName && existingName !== name
-      ? await db.from('product_recipes').update(record).eq('name', existingName)
-      : await db.from('product_recipes').upsert(record, { onConflict: 'name' });
-    return error ? fail('Não foi possível guardar a ficha.', 400) : reply({ ok: true });
+  if (action === 'recipes:proposals:list') {
+    if(!canManage(actor))return fail('Só a Gerência pode consultar propostas de edição.',403);
+    const {data,error}=await db.from('product_recipe_proposals').select('id,recipe_id,proposed_by,name,category,ingredients,method,history,allergens,sale_price_inc_vat,ingredient_cost_ex_vat,created_at').eq('status','pending').order('created_at',{ascending:true});
+    if(error)return fail('Não foi possível carregar as fichas por aprovar.',500);
+    const ids=[...new Set((data||[]).map(x=>x.proposed_by))],{data:profiles}=ids.length?await db.from('profiles').select('id,display_name').in('id',ids):{data:[]};
+    const names=new Map((profiles||[]).map(x=>[x.id,x.display_name]));
+    return reply({proposals:(data||[]).map(x=>({...x,proposed_by_name:names.get(x.proposed_by)||'—'}))});
+  }
+
+  if (action === 'recipes:propose' || action === 'recipes:save') {
+    const r=(body.recipe&&typeof body.recipe==='object'?body.recipe:{}) as Record<string,unknown>;
+    const name=String(r.name||'').trim(),category=String(r.category||'Outros').trim(),ingredients=String(r.ingredients||''),method=String(r.method||''),history=String(r.history||'');
+    let recipeId=String(r.recipeId||body.recipeId||'').trim();
+    const legacyName=String(body.existingName||'').trim();
+    if(!recipeId&&legacyName&&canManage(actor)){const {data:old}=await db.from('product_recipes').select('id').eq('name',legacyName).eq('active',true).maybeSingle();recipeId=old?.id||'';}
+    if(!name||name.length>160||category.length>100||ingredients.length>4000||method.length>4000||history.length>1600)return fail('Confirma o nome e o conteúdo da ficha (limites: nome 160, categoria 100, textos 4000/1600 caracteres).');
+    if(actor.role==='staff'&&!recipeId)return fail('Só a Gerência pode propor uma ficha nova. Podes sugerir alterações às fichas existentes.');
+    if(recipeId&&!/^[0-9a-f-]{36}$/i.test(recipeId))return fail('Ficha técnica inválida.');
+    if(recipeId){const {data:existing,error:existingError}=await db.from('product_recipes').select('id').eq('id',recipeId).eq('active',true).maybeSingle();if(existingError||!existing)return fail('A ficha já não está disponível para edição.',404);}
+    let pendingQuery=db.from('product_recipe_proposals').select('id').eq('status','pending');
+    pendingQuery=recipeId?pendingQuery.eq('recipe_id',recipeId):pendingQuery.is('recipe_id',null).ilike('name',name);
+    const {data:pending,error:pendingError}=await pendingQuery.maybeSingle();if(pendingError)return fail('Não foi possível verificar propostas pendentes.',500);if(pending)return fail('Já existe uma proposta pendente para esta ficha. A Gerência deve aprová-la ou rejeitá-la primeiro.');
+    const rawAllergens=r.allergens,allergens=rawAllergens===undefined?null:(Array.isArray(rawAllergens)?rawAllergens.map(x=>String(x).trim()).filter(Boolean):String(rawAllergens||'').split(/[;,\n]/).map(x=>x.trim()).filter(Boolean));
+    if(allergens&& (allergens.length>30||allergens.some(x=>x.length>80)))return fail('Revê os alergénios (máximo 30 itens, 80 caracteres por item).');
+    const proposal:Record<string,unknown>={recipe_id:recipeId||null,proposed_by:actor.id,name,category,ingredients,method,history,allergens};
+    if(canManage(actor)){
+      const sale=r.sale===undefined||r.sale===''?null:Number(r.sale),cost=r.cost===undefined||r.cost===''?null:Number(r.cost);
+      if((sale!==null&&(!Number.isFinite(sale)||sale<0))||(cost!==null&&(!Number.isFinite(cost)||cost<0)))return fail('Preço e custo devem ser valores válidos e não negativos.');
+      if(!recipeId&&(sale===null||cost===null))return fail('Uma ficha nova precisa de preço de venda e custo estimado definidos pela Gerência.');
+      proposal.sale_price_inc_vat=sale;proposal.ingredient_cost_ex_vat=cost;
+    }
+    const {data:created,error}=await db.from('product_recipe_proposals').insert(proposal).select('id').single();
+    if(error)return fail('Não foi possível enviar a proposta de alteração.',400);
+    return reply({ok:true,proposalId:created.id,status:'pending'});
+  }
+
+  if (action === 'recipes:proposal-review') {
+    if(!canManage(actor))return fail('Só a Gerência pode aprovar ou rejeitar alterações às fichas.',403);
+    const proposalId=String(body.proposalId||''),decision=String(body.decision||''),reviewNote=String(body.reviewNote||'').slice(0,1000);
+    if(!/^[0-9a-f-]{36}$/i.test(proposalId)||!['approved','rejected'].includes(decision))return fail('Indica uma proposta e uma decisão válidas.');
+    const {data,error}=await db.rpc('review_product_recipe_proposal',{p_proposal_id:proposalId,p_decision:decision,p_reviewer_id:actor.id,p_review_note:reviewNote||null});
+    if(error)return fail(error.message||'Não foi possível rever a proposta.',400);
+    return reply(data||{ok:true,status:decision});
   }
 
   if (action.startsWith('users:')) {

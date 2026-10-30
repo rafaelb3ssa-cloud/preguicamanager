@@ -4,7 +4,7 @@
 
 O portal oficial está publicado no projeto Vercel `preguicamanager-web`, em [preguicamanager-web.vercel.app](https://preguicamanager-web.vercel.app/). A versão de produção é promovida do ramo de publicação `codex/preguica-release-20261029`; a raiz do site é `Preguica_Manager_v2/web`. A aplicação usa o Supabase `hmuzfvmpstejcnyiwbtx` e a função server-side `preguica-auth`.
 
-A autenticação por PIN e as operações sensíveis passam pelo Edge Function `preguica-auth`, com sessões opacas e autorização no servidor. PINs são armazenados como hashes; a chave service-role fica apenas no ambiente da Edge Function. O ecrã de login apresenta Gerência e cada perfil de colaboradora pelo nome; cada PIN identifica o respetivo perfil no servidor. Os PINs são hashes e podem ser alterados pela Gerência na gestão da equipa; o PIN nunca é validado só no browser. Na aplicação, esse perfil vê apenas HACCP e os seus submenus, fichas técnicas em consulta e stock/compras. Só a Gerência vê os restantes módulos e pode editar fichas, configurar artigos ou gerir horários, férias e equipa. Os módulos de horários, assiduidade, higienização das instalações, fornecedores e stock usam operações persistentes na base de dados. O painel apresenta os registos e tarefas operacionais pendentes para o dia.
+A autenticação por PIN e as operações sensíveis passam pelo Edge Function `preguica-auth`, com sessões opacas e autorização no servidor. PINs são armazenados como hashes; a chave service-role fica apenas no ambiente da Edge Function. O ecrã de login apresenta Gerência e cada perfil de colaboradora pelo nome; cada PIN identifica o respetivo perfil no servidor. Os PINs são hashes e podem ser alterados pela Gerência na gestão da equipa; o PIN nunca é validado só no browser. Na aplicação, esse perfil vê os módulos autorizados e consulta fichas técnicas publicadas. Qualquer colaborador pode sugerir uma correção numa ficha; a versão publicada só muda depois da aprovação da Gerência. Só a Gerência vê a fila de propostas, pode aprovar ou rejeitar, editar valores financeiros e gerir horários, férias e equipa. Os módulos usam operações persistentes na base de dados.
 
 ## Equipa e horários
 
@@ -36,11 +36,11 @@ Os equipamentos de frio são identificados como Frigo 1 (bar), Frigo 2 (cozinha)
 
 O módulo Stock & compras passa a chamar-se Encomendas diárias. Cada produto existente pode ser selecionado e ter quantidade de encomenda registada por dia; a quantidade começa a zero quando ainda não existe encomenda guardada. A quantidade atual continua editável para inventário, enquanto mínimos, preços e fornecedores permanecem só para a gerência. As encomendas ficam em `daily_order_items` com RLS ativo e sem leitura direta por chaves públicas.
 
-As fichas técnicas incluem uma área reservada para fotografia futura; o carregamento de imagens não está incluído nesta alteração.
+As fichas técnicas incluem uma área reservada para fotografia futura; o carregamento de imagens não está incluído nesta alteração. As propostas de alteração ficam numa tabela protegida sem acesso direto por chaves públicas. A Gerência aprova ou rejeita cada proposta; apenas a aprovação altera/cria a ficha publicada. Na grelha, a categoria aparece depois da breve história.
 
 ## Base de dados e alterações
 
-O esquema e dados originais foram preservados. A migração `20261028185524_team_schedule_suppliers_facility_log_and_leave_days.sql` acrescentou os recursos da equipa e a migração `20261028232648_daily_orders_and_haccp_training_acknowledgements.sql` acrescenta encomendas diárias e confirmações de formação, ambas com acesso mediado pela função de servidor.
+O esquema e dados originais foram preservados. As migrações acrescentam os recursos da equipa, encomendas diárias, confirmações de formação e o fluxo de aprovação das fichas técnicas. As alterações com dados privados são mediadas pela função de servidor.
 
 A segurança deve continuar a ser revista antes de promover a produção. O Supabase Security Advisor ainda aponta funções `SECURITY DEFINER` preexistentes acessíveis a `authenticated`; as tabelas `app_sessions` e `pin_login_attempts` têm RLS sem políticas e são usadas pelo serviço privilegiado de autenticação. Estes avisos não foram alterados nesta branch.
 
