@@ -149,7 +149,15 @@ Deno.serve(async (req: Request) => {
     const {error}=await db.rpc('change_profile_pin',{p_profile_id:actor.id,p_pin:newPin});
     return error?fail('Não foi possível alterar o PIN.',400):reply({ok:true});
   }
-  const staffActions=new Set(['pin:change','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save']);
+  if (action === 'account:details') {
+    const [{data:employment,error:employmentError},{data:insurance,error:insuranceError}] = await Promise.all([
+      db.from('staff_employment_details').select('start_date').eq('profile_id',actor.id).maybeSingle(),
+      db.from('company_private_settings').select('provider_name,policy_number').eq('setting_key','work_accident_insurance').maybeSingle(),
+    ]);
+    if (employmentError || insuranceError) return fail('Não foi possível carregar os dados do perfil.',500);
+    return reply({employmentStartDate:employment?.start_date||null,insurance:insurance?{providerName:insurance.provider_name,policyNumber:insurance.policy_number}:null});
+  }
+  const staffActions=new Set(['pin:change','account:details','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
   if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
   if(actor.role==='staff'&&!actor.attendance_access&&action.startsWith('attendance:'))return fail('Este perfil não tem acesso ao registo de assiduidade.',403);
