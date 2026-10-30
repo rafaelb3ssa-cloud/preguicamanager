@@ -353,3 +353,7 @@ update public.suppliers set order_weekday=4, delivery_weekday=5, updated_at=now(
 insert into public.suppliers(name,order_weekday,delivery_weekday,active)
 values ('Makro',4,5,true)
 on conflict(name) do update set order_weekday=excluded.order_weekday,delivery_weekday=excluded.delivery_weekday,active=true,updated_at=now();
+
+-- Só os fornecedores com dia recorrente confirmado geram tarefas diárias automáticas.
+update public.suppliers set order_weekday=null, delivery_weekday=null, updated_at=now()
+where name in ('Pão','Garrafeira','Fruta');
