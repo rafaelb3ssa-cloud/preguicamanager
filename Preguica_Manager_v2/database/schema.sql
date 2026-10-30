@@ -14,6 +14,7 @@ create table public.profiles (
   role public.app_role not null default 'staff',
   active boolean not null default true,
   schedule_access boolean not null default true,
+  attendance_access boolean not null default true,
   created_at timestamptz not null default now()
 );
 
