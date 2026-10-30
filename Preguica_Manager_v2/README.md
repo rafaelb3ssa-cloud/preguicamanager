@@ -22,7 +22,7 @@ O total anual é 22 dias de férias: 11 em janeiro, 5 em junho/julho, 4 em agost
 
 A lista sugerida calcula `max(0, mínimo configurado - quantidade atual)` e mostra a diferença a comprar por artigo. A colaboradora pode atualizar quantidades reais e consultar/encomendar; apenas a Gerência pode criar ou editar artigos, mínimos, preços e fornecedores. Existem categorias para organizar o inventário.
 
-Fornecedores e entregas registados: Recheio (segunda/terça), Sumol Compal (terça/quarta), Super Bock e gelo (quarta/quinta), pão, garrafeira e fruta (quinta/sexta). Telefones estão vazios porque não foram fornecidos.
+Planeamento operacional: Recheio (encomenda segunda, entrega terça), Sumol Compal (terça/quarta), gelo e Super Bock (quarta/quinta), Mapa dos Vinhos e Makro (quinta/sexta). O painel pede um carimbo para cada encomenda enviada e para cada entrega verificada. A receção só fica concluída quando é confirmado que chegou e estava em condições; atrasos ou problemas ficam registados a vermelho com nota. O histórico de verificações de entrega é guardado sem substituir eventos anteriores. Outros fornecedores e os seus dados existentes foram preservados.
 
 O ficheiro Numbers recebido é um inventário de dezembro de 2025. Não foram importadas quantidades antigas como stock atual. Para importar nomes, categorias, unidades e custos sem quantidades, exportar o documento para Excel (`.xlsx`) ou CSV e enviá-lo.
 
