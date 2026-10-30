@@ -357,3 +357,16 @@ on conflict(name) do update set order_weekday=excluded.order_weekday,delivery_we
 -- Só os fornecedores com dia recorrente confirmado geram tarefas diárias automáticas.
 update public.suppliers set order_weekday=null, delivery_weekday=null, updated_at=now()
 where name in ('Pão','Garrafeira','Fruta');
+
+
+-- Shared supplier order sheets; all portal access goes through the authenticated Edge Function.
+CREATE TABLE public.supplier_order_sheets (
+  supplier_key text PRIMARY KEY CHECK (supplier_key IN ('recheio','sumol','gelo','superbock','mapa','makro','pao','garrafeira','fruta','torrie')),
+  lines jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(lines) = 'array'),
+  updated_by uuid NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.supplier_order_sheets ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.supplier_order_sheets FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE ON TABLE public.supplier_order_sheets TO service_role;
+COMMENT ON TABLE public.supplier_order_sheets IS 'Shared current supplier order sheets; access is mediated by the authenticated Preguica Edge Function.';
