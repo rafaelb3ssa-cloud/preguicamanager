@@ -149,7 +149,7 @@ Deno.serve(async (req: Request) => {
     const {error}=await db.rpc('change_profile_pin',{p_profile_id:actor.id,p_pin:newPin});
     return error?fail('Não foi possível alterar o PIN.',400):reply({ok:true});
   }
-  const staffActions=new Set(['pin:change','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save']);
+  const staffActions=new Set(['pin:change','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
   if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
   if(actor.role==='staff'&&!actor.attendance_access&&action.startsWith('attendance:'))return fail('Este perfil não tem acesso ao registo de assiduidade.',403);
@@ -212,39 +212,70 @@ Deno.serve(async (req: Request) => {
   }
 
   if (action === 'supplier-order-sheets:list') {
-    const { data, error } = await db.from('supplier_order_sheets')
+    const { data: sheets, error } = await db.from('supplier_order_sheets')
       .select('supplier_key,lines,updated_by,updated_at')
       .order('supplier_key');
-    return error ? fail('Não foi possível carregar as encomendas guardadas.', 500) : reply({ sheets: data || [] });
+    if (error) return fail('Não foi possível carregar as encomendas guardadas.', 500);
+    const { data: history, error: historyError } = await db.from('supplier_order_sheet_history')
+      .select('id,changed_by,supplier_keys,line_count,saved_at')
+      .order('saved_at', { ascending: false }).limit(100);
+    if (historyError) return fail('Não foi possível carregar o histórico das encomendas.', 500);
+    const ids = [...new Set((history || []).map((row) => row.changed_by))];
+    const { data: profiles, error: profilesError } = ids.length
+      ? await db.from('profiles').select('id,display_name').in('id', ids)
+      : { data: [], error: null };
+    if (profilesError) return fail('Não foi possível carregar os nomes do histórico.', 500);
+    const names = new Map((profiles || []).map((profile) => [profile.id, profile.display_name]));
+    return reply({
+      sheets: sheets || [],
+      history: (history || []).map((row) => ({ ...row, display_name: names.get(row.changed_by) || 'Colaborador/a' })),
+    });
   }
 
   if (action === 'supplier-order-sheets:save') {
-    const supplierKey = String(body.supplierKey || '').trim();
     const allowedSuppliers = new Set(['recheio','sumol','gelo','superbock','mapa','makro','pao','garrafeira','fruta','torrie']);
-    if (!allowedSuppliers.has(supplierKey)) return fail('Fornecedor inválido.');
-    if (!Array.isArray(body.lines) || body.lines.length > 200) return fail('A folha deve ter até 200 linhas.');
-    const lines: Array<{ product: string; quantity: string; urgent: boolean }> = [];
-    for (const raw of body.lines) {
-      if (!raw || typeof raw !== 'object') return fail('Linha de encomenda inválida.');
-      const product = String((raw as Record<string, unknown>).product || '').trim();
-      const rawQuantity = String((raw as Record<string, unknown>).quantity ?? '').trim().replace(',', '.');
-      const urgent = Boolean((raw as Record<string, unknown>).urgent);
-      if (!product && !rawQuantity) continue;
-      if (!product || product.length > 120) return fail('Cada linha precisa de um produto (máximo 120 caracteres).');
-      if (!rawQuantity) { lines.push({ product, quantity: '', urgent }); continue; }
-      if (!/^(?:\d+(?:\.\d+)?|\d+\s*\/\s*\d+)$/.test(rawQuantity)) return fail('Indica uma quantidade válida; podes usar números ou frações, por exemplo 1/3.');
-      const parts = rawQuantity.split('/');
-      const amount = parts.length === 2 ? Number(parts[0]) / Number(parts[1]) : Number(rawQuantity);
-      if (!Number.isFinite(amount) || amount <= 0) return fail('A quantidade deve ser superior a zero.');
-      lines.push({ product, quantity: rawQuantity, urgent });
+    const incoming = Array.isArray(body.sheets) ? body.sheets : [{ supplierKey: body.supplierKey, lines: body.lines }];
+    if (!incoming.length || incoming.length > 10) return fail('Seleciona uma ou mais folhas de fornecedor válidas.');
+    const seen = new Set<string>();
+    const cleanSheets: Array<{ supplier_key: string; lines: Array<{ product: string; quantity: string; urgent: boolean }>; updated_by: string; updated_at: string }> = [];
+    for (const rawSheet of incoming) {
+      if (!rawSheet || typeof rawSheet !== 'object') return fail('Folha de fornecedor inválida.');
+      const sheet = rawSheet as Record<string, unknown>;
+      const supplierKey = String(sheet.supplierKey || '').trim();
+      if (!allowedSuppliers.has(supplierKey) || seen.has(supplierKey)) return fail('Fornecedor inválido ou repetido.');
+      seen.add(supplierKey);
+      if (!Array.isArray(sheet.lines) || sheet.lines.length > 200) return fail('Cada folha deve ter até 200 linhas.');
+      const lines: Array<{ product: string; quantity: string; urgent: boolean }> = [];
+      for (const raw of sheet.lines) {
+        if (!raw || typeof raw !== 'object') return fail('Linha de encomenda inválida.');
+        const row = raw as Record<string, unknown>;
+        const product = String(row.product || '').trim();
+        const rawQuantity = String(row.quantity ?? '').trim().replace(',', '.');
+        const urgent = Boolean(row.urgent);
+        if (!product && !rawQuantity) continue;
+        if (!product || product.length > 120) return fail('Cada linha precisa de um produto (máximo 120 caracteres).');
+        if (!rawQuantity) { lines.push({ product, quantity: '', urgent }); continue; }
+        if (!/^(?:\\d+(?:\\.\\d+)?|\\d+\\s*\\/\\s*\\d+)$/.test(rawQuantity)) return fail('Indica uma quantidade válida; podes usar números ou frações, por exemplo 1/3.');
+        const parts = rawQuantity.split('/');
+        const amount = parts.length === 2 ? Number(parts[0]) / Number(parts[1]) : Number(rawQuantity);
+        if (!Number.isFinite(amount) || amount <= 0) return fail('A quantidade deve ser superior a zero.');
+        lines.push({ product, quantity: rawQuantity, urgent });
+      }
+      cleanSheets.push({ supplier_key: supplierKey, lines, updated_by: actor.id, updated_at: new Date().toISOString() });
     }
-    const { data, error } = await db.from('supplier_order_sheets').upsert({
-      supplier_key: supplierKey,
-      lines,
-      updated_by: actor.id,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'supplier_key' }).select('supplier_key,lines,updated_by,updated_at').single();
-    return error ? fail('Não foi possível guardar esta encomenda.', 400) : reply({ sheet: data });
+    const { data: savedSheets, error } = await db.from('supplier_order_sheets')
+      .upsert(cleanSheets, { onConflict: 'supplier_key' })
+      .select('supplier_key,lines,updated_by,updated_at');
+    if (error) return fail('Não foi possível guardar esta encomenda.', 400);
+    const { data: savedHistory, error: historyError } = await db.from('supplier_order_sheet_history')
+      .insert({
+        changed_by: actor.id,
+        supplier_keys: cleanSheets.map((sheet) => sheet.supplier_key),
+        line_count: cleanSheets.reduce((total, sheet) => total + sheet.lines.length, 0),
+      })
+      .select('id,changed_by,supplier_keys,line_count,saved_at').single();
+    if (historyError) return fail('As encomendas foram guardadas, mas não foi possível registar o histórico.', 500);
+    return reply({ sheets: savedSheets || [], sheet: savedSheets?.length === 1 ? savedSheets[0] : null, history: savedHistory });
   }
 
   if (action === 'stock:list') {
