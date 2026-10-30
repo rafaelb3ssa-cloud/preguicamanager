@@ -231,6 +231,7 @@ Deno.serve(async (req: Request) => {
       const urgent = Boolean((raw as Record<string, unknown>).urgent);
       if (!product && !rawQuantity) continue;
       if (!product || product.length > 120) return fail('Cada linha precisa de um produto (máximo 120 caracteres).');
+      if (!rawQuantity) { lines.push({ product, quantity: '', urgent }); continue; }
       if (!/^(?:\d+(?:\.\d+)?|\d+\s*\/\s*\d+)$/.test(rawQuantity)) return fail('Indica uma quantidade válida; podes usar números ou frações, por exemplo 1/3.');
       const parts = rawQuantity.split('/');
       const amount = parts.length === 2 ? Number(parts[0]) / Number(parts[1]) : Number(rawQuantity);
