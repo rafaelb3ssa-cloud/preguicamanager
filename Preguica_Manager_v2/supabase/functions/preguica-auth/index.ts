@@ -211,6 +211,41 @@ Deno.serve(async (req: Request) => {
     return error?fail('Não foi possível guardar os textos dos módulos.',400):reply({ok:true});
   }
 
+  if (action === 'supplier-order-sheets:list') {
+    const { data, error } = await db.from('supplier_order_sheets')
+      .select('supplier_key,lines,updated_by,updated_at')
+      .order('supplier_key');
+    return error ? fail('Não foi possível carregar as encomendas guardadas.', 500) : reply({ sheets: data || [] });
+  }
+
+  if (action === 'supplier-order-sheets:save') {
+    const supplierKey = String(body.supplierKey || '').trim();
+    const allowedSuppliers = new Set(['recheio','sumol','gelo','superbock','mapa','makro','pao','garrafeira','fruta','torrie']);
+    if (!allowedSuppliers.has(supplierKey)) return fail('Fornecedor inválido.');
+    if (!Array.isArray(body.lines) || body.lines.length > 200) return fail('A folha deve ter até 200 linhas.');
+    const lines: Array<{ product: string; quantity: string; urgent: boolean }> = [];
+    for (const raw of body.lines) {
+      if (!raw || typeof raw !== 'object') return fail('Linha de encomenda inválida.');
+      const product = String((raw as Record<string, unknown>).product || '').trim();
+      const rawQuantity = String((raw as Record<string, unknown>).quantity ?? '').trim().replace(',', '.');
+      const urgent = Boolean((raw as Record<string, unknown>).urgent);
+      if (!product && !rawQuantity) continue;
+      if (!product || product.length > 120) return fail('Cada linha precisa de um produto (máximo 120 caracteres).');
+      if (!/^(?:\\d+(?:\\.\\d+)?|\\d+\\s*\\/\\s*\\d+)$/.test(rawQuantity)) return fail('Indica uma quantidade válida; podes usar números ou frações, por exemplo 1/3.');
+      const parts = rawQuantity.split('/');
+      const amount = parts.length === 2 ? Number(parts[0]) / Number(parts[1]) : Number(rawQuantity);
+      if (!Number.isFinite(amount) || amount <= 0) return fail('A quantidade deve ser superior a zero.');
+      lines.push({ product, quantity: rawQuantity, urgent });
+    }
+    const { data, error } = await db.from('supplier_order_sheets').upsert({
+      supplier_key: supplierKey,
+      lines,
+      updated_by: actor.id,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'supplier_key' }).select('supplier_key,lines,updated_by,updated_at').single();
+    return error ? fail('Não foi possível guardar esta encomenda.', 400) : reply({ sheet: data });
+  }
+
   if (action === 'stock:list') {
     const { data, error } = await db.from('stock_items').select('id,name,category,unit,quantity,minimum_quantity,supplier_name,unit_cost_ex_vat,active').eq('active', true).order('category').order('name');
     return error ? fail('Não foi possível carregar o inventário.', 500) : reply({ items: (data || []).map(({unit_cost_ex_vat,...item})=>actor.role==='staff'?item:{...item,unit_cost_ex_vat}) });
