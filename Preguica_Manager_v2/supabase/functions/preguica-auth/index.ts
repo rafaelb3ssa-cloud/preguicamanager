@@ -205,10 +205,20 @@ Deno.serve(async (req: Request) => {
       const {error}=await db.from('staff_onboarding_acknowledgements').upsert({profile_id:actor.id,revision:item.revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,revision'});
       return error?fail('Não foi possível guardar este visto.',400):reply({ok:true,itemKey:item.revision});
     }
-    const {data:acknowledgements,error}=await db.from('staff_onboarding_acknowledgements').select('revision,acknowledged_at').eq('profile_id',actor.id).like('revision','profile-learning-v1:%');
-    if(error)return fail('Não foi possível carregar os vistos do perfil.',500);
-    const completed=new Map((acknowledgements||[]).map(x=>[x.revision,x.acknowledged_at]));
-    return reply({items:learningItems.map(item=>({...item,acknowledged_at:completed.get(item.revision)||null}))});
+    if(actor.role==='staff'){
+      const {data:acknowledgements,error}=await db.from('staff_onboarding_acknowledgements').select('revision,acknowledged_at').eq('profile_id',actor.id).like('revision','profile-learning-v1:%');
+      if(error)return fail('Não foi possível carregar os vistos do perfil.',500);
+      const completed=new Map((acknowledgements||[]).map(x=>[x.revision,x.acknowledged_at]));
+      return reply({items:learningItems.map(item=>({...item,acknowledged_at:completed.get(item.revision)||null}))});
+    }
+    const {data:teamProfiles,error:profilesError}=await db.from('profiles').select('id,display_name').eq('active',true).eq('role','staff').order('display_name');
+    if(profilesError)return fail('Não foi possível carregar a equipa para o progresso.',500);
+    const profileIds=(teamProfiles||[]).map(profile=>profile.id);
+    const {data:teamAcknowledgements,error:teamAcknowledgementsError}=profileIds.length?await db.from('staff_onboarding_acknowledgements').select('profile_id,revision').in('profile_id',profileIds).like('revision','profile-learning-v1:%'):{data:[],error:null};
+    if(teamAcknowledgementsError)return fail('Não foi possível carregar os vistos da equipa.',500);
+    const completedByProfile=new Map<string,string[]>();
+    for(const row of teamAcknowledgements||[]){const revisions=completedByProfile.get(row.profile_id)||[];revisions.push(row.revision);completedByProfile.set(row.profile_id,revisions)}
+    return reply({items:learningItems,teamProgress:(teamProfiles||[]).map(profile=>({profile_id:profile.id,display_name:profile.display_name,completed_revisions:completedByProfile.get(profile.id)||[]}))});
   }
   if(action==='onboarding:modules:save'){
     if(!canManage(actor))return fail('Só a Gerência pode editar os textos de integração.',403);
