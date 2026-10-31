@@ -124,7 +124,7 @@ Deno.serve(async (req: Request) => {
       return fail('PIN incorreto.', 401);
     }
     await db.rpc('record_pin_login_attempt', { p_attempt_key: attemptKey, p_success: true });
-    const { data: profile, error } = await db.from('profiles').select('id,display_name,role,active,activity_exempt,schedule_access,attendance_access').eq('id', profileId).eq('active', true).single();
+    const { data: profile, error } = await db.from('profiles').select('id,display_name,role,active,activity_exempt,schedule_access,schedule_manage,attendance_access').eq('id', profileId).eq('active', true).single();
     if (error || !profile) return fail('Utilizador indisponível.', 401);
     const token = randomToken();
     const { error: sessionError } = await db.from('app_sessions').insert({ token_hash: await sha(token), profile_id: profile.id, expires_at: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString() });
