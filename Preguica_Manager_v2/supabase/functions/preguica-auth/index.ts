@@ -19,7 +19,7 @@ const randomToken = () => {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 };
-type Profile = { id: string; display_name: string; role: 'owner' | 'manager' | 'staff'; active: boolean; activity_exempt: boolean; schedule_access: boolean; attendance_access: boolean };
+type Profile = { id: string; display_name: string; role: 'owner' | 'manager' | 'staff'; active: boolean; activity_exempt: boolean; schedule_access: boolean; schedule_manage: boolean; attendance_access: boolean };
 
 async function currentProfile(req: Request): Promise<Profile | null> {
   const token = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || '';
@@ -27,10 +27,11 @@ async function currentProfile(req: Request): Promise<Profile | null> {
   const { data: session } = await db.from('app_sessions').select('profile_id, expires_at')
     .eq('token_hash', await sha(token)).gt('expires_at', new Date().toISOString()).maybeSingle();
   if (!session) return null;
-  const { data } = await db.from('profiles').select('id,display_name,role,active,activity_exempt,schedule_access,attendance_access').eq('id', session.profile_id).eq('active', true).maybeSingle();
+  const { data } = await db.from('profiles').select('id,display_name,role,active,activity_exempt,schedule_access,schedule_manage,attendance_access').eq('id', session.profile_id).eq('active', true).maybeSingle();
   return data as Profile | null;
 }
 const canManage = (profile: Profile) => profile.role === 'owner' || profile.role === 'manager';
+const canManageSchedule = (profile: Profile) => canManage(profile) || profile.schedule_manage === true;
 const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 const dateInTimezone = (value: string | Date, timeZone = 'Europe/Lisbon') => {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
@@ -157,9 +158,9 @@ Deno.serve(async (req: Request) => {
     if (employmentError || insuranceError) return fail('Não foi possível carregar os dados do perfil.',500);
     return reply({employmentStartDate:employment?.start_date||null,insurance:insurance?{providerName:insurance.provider_name,policyNumber:insurance.policy_number}:null});
   }
-  const staffActions=new Set(['pin:change','account:details','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save']);
+  const staffActions=new Set(['pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
-  if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
+  if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list','schedule:save','schedule:publish'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
   if(actor.role==='staff'&&!actor.attendance_access&&action.startsWith('attendance:'))return fail('Este perfil não tem acesso ao registo de assiduidade.',403);
 
   if(action==='onboarding:status'){
@@ -560,7 +561,7 @@ Deno.serve(async (req: Request) => {
     const balances=schedule.accumulated_hours&&typeof schedule.accumulated_hours==='object'?schedule.accumulated_hours:{};balances[staffId]=hours;const {error:updateError}=await db.from('weekly_schedules').update({accumulated_hours:balances}).eq('id',schedule.id);return updateError?fail('Não foi possível guardar o saldo acumulado.',400):reply({ok:true});
   }
   if (action === 'schedule:save') {
-    if(!canManage(actor))return fail('Só a gerência pode editar horários.',403);
+    if(!canManageSchedule(actor))return fail('Este perfil não pode editar horários.',403);
     const week=String(body.weekStart||''), items=Array.isArray(body.shifts)?body.shifts:[]; if(!validDate(week)||items.length>80)return fail('Horário inválido.');
     const existing=await db.from('weekly_schedules').select('id,version').eq('week_start',week).eq('status','draft').order('version',{ascending:false}).limit(1).maybeSingle();
     let schedule=existing.data;
@@ -570,7 +571,7 @@ Deno.serve(async (req: Request) => {
     await db.from('shifts').delete().eq('schedule_id',schedule.id); if(clean.length){const {error}=await db.from('shifts').insert(clean);if(error)return fail('Não foi possível guardar os turnos.',400)} return reply({ok:true,scheduleId:schedule.id});
   }
   if (action === 'schedule:publish') {
-    if(!canManage(actor))return fail('Só a gerência pode publicar horários.',403);
+    if(!canManageSchedule(actor))return fail('Este perfil não pode publicar horários.',403);
     const id=String(body.scheduleId||''); if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Horário inválido.');
     const {error}=await db.from('weekly_schedules').update({status:'published',published_by:actor.id,published_at:new Date().toISOString()}).eq('id',id).eq('status','draft');
     return error?fail('Não foi possível publicar o horário.',400):reply({ok:true});
