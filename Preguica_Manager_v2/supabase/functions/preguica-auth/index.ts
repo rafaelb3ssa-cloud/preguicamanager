@@ -176,6 +176,9 @@ Deno.serve(async (req: Request) => {
     if(attendanceError)return fail('Não foi possível calcular a assiduidade da equipa.',500);
     const attendanceByShift=new Map<string,string[]>();for(const row of attendanceRows||[]){if(['cancelled','rejected'].includes(String(row.status||'')))continue;const kinds=attendanceByShift.get(row.shift_id)||[];kinds.push(row.kind);attendanceByShift.set(row.shift_id,kinds);}
     const attendanceStats=expectedShifts.reduce((stats,shift)=>{const kinds=attendanceByShift.get(shift.id)||[],incident=kinds.some(kind=>['absence','medical_leave','vacation'].includes(kind)),cin=kinds.includes('clock_in'),cout=kinds.includes('clock_out');if(incident){stats.punches+=2;stats.registeredShifts++;}else{stats.punches+=Number(cin)+Number(cout);if(cin||cout)stats.registeredShifts++;}return stats;},{punches:0,registeredShifts:0});
+    const todayStaffIds=[...new Set(expectedShifts.map(shift=>shift.staff_id))],{data:todayStaff,error:todayStaffError}=todayStaffIds.length?await db.from('profiles').select('id,display_name').in('id',todayStaffIds).eq('active',true).eq('role','staff').neq('id',RAFAEL_PROFILE_ID):{data:[],error:null};
+    if(todayStaffError)return fail('Não foi possível associar os registos às colaboradoras.',500);
+    const attendancePeople=(todayStaff||[]).map(profile=>{const shifts=expectedShifts.filter(shift=>shift.staff_id===profile.id);let completedShifts=0,hasEntry=false,hasExit=false,hasOccurrence=false,registered=false;for(const shift of shifts){const kinds=attendanceByShift.get(shift.id)||[],incident=kinds.some(kind=>['absence','medical_leave','vacation'].includes(kind)),cin=kinds.includes('clock_in'),cout=kinds.includes('clock_out');if(incident){completedShifts++;hasOccurrence=true;registered=true;}else{hasEntry=hasEntry||cin;hasExit=hasExit||cout;if(cin||cout)registered=true;if(cin&&cout)completedShifts++;}}return{profile_id:profile.id,display_name:profile.display_name,completed_shifts:completedShifts,total_shifts:shifts.length,has_entry:hasEntry,has_exit:hasExit,has_occurrence:hasOccurrence,registered,complete:shifts.length>0&&completedShifts===shifts.length};}).sort((a,b)=>a.display_name.localeCompare(b.display_name,'pt-PT')),attendanceStatus={completed:attendancePeople.filter(person=>person.complete).length,total:attendancePeople.length,people:attendancePeople};
     const [temperatureQuery,taskQuery,cleaningQuery,orderQuery,deliveryQuery]=await Promise.all([
       db.from('haccp_records').select('equipment_name,checklist_data').eq('kind','temperature').eq('record_date',date),
       db.from('cleaning_tasks').select('id').eq('active',true).eq('frequency','daily'),
@@ -200,7 +203,7 @@ Deno.serve(async (req: Request) => {
       {label:'Encomendas',done:orderIds.filter(id=>ordered.has(id)).length,total:orderIds.length},
       {label:'Entregas',done:deliveryIds.filter(id=>latestDelivery.get(id)==='received_ok').length,total:deliveryIds.length},
     ];
-    return reply({date,groups,done:groups.reduce((sum,x)=>sum+x.done,0),total:groups.reduce((sum,x)=>sum+x.total,0)});
+    return reply({date,groups,attendanceStatus,done:groups.reduce((sum,x)=>sum+x.done,0),total:groups.reduce((sum,x)=>sum+x.total,0)});
   }
   if(action==='onboarding:status'){
     const revision='welcome-preguica-v4';let query=db.from('staff_onboarding_acknowledgements').select('profile_id,revision,acknowledged_at').eq('revision',revision);
