@@ -1,5 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
+const RAFAEL_PROFILE_ID='0e85194a-1edd-4d1d-b4fa-3f40ee2ae6cb';
 const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
@@ -158,11 +159,49 @@ Deno.serve(async (req: Request) => {
     if (employmentError || insuranceError) return fail('Não foi possível carregar os dados do perfil.',500);
     return reply({employmentStartDate:employment?.start_date||null,insurance:insurance?{providerName:insurance.provider_name,policyNumber:insurance.policy_number}:null});
   }
-  const staffActions=new Set(['pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save']);
+  const staffActions=new Set(['pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','dashboard:daily-progress']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
   if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list','schedule:save','schedule:publish'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
   if(actor.role==='staff'&&!actor.attendance_access&&action.startsWith('attendance:'))return fail('Este perfil não tem acesso ao registo de assiduidade.',403);
 
+  if(action==='dashboard:daily-progress'){
+    if(!canManage(actor)&&actor.id!==RAFAEL_PROFILE_ID)return fail('Este resumo está disponível apenas à Gerência e ao Rafael Bessa.',403);
+    const date=lisbonToday(),week=mondayOf(date),weekday=((new Date(`${date}T12:00:00Z`).getUTCDay()+6)%7)+1;
+    const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('week_start',week).eq('status','published').order('version',{ascending:false}).limit(1).maybeSingle();
+    if(scheduleError)return fail('Não foi possível carregar o horário publicado.',500);
+    let expectedShifts:any[]=[];
+    if(schedule){const {data,error}=await db.from('shifts').select('id,staff_id').eq('schedule_id',schedule.id).eq('shift_date',date);if(error)return fail('Não foi possível carregar os turnos de hoje.',500);expectedShifts=data||[];}
+    const shiftIds=expectedShifts.map(x=>x.id);
+    const {data:attendanceRows,error:attendanceError}=shiftIds.length?await db.from('attendance_records').select('shift_id,kind').in('shift_id',shiftIds):{data:[],error:null};
+    if(attendanceError)return fail('Não foi possível calcular a assiduidade da equipa.',500);
+    const attendanceByShift=new Map<string,string[]>();for(const row of attendanceRows||[]){const kinds=attendanceByShift.get(row.shift_id)||[];kinds.push(row.kind);attendanceByShift.set(row.shift_id,kinds);}
+    const attendanceDone=expectedShifts.filter(shift=>{const kinds=attendanceByShift.get(shift.id)||[];return kinds.some(kind=>['absence','medical_leave','vacation'].includes(kind))||(kinds.includes('clock_in')&&kinds.includes('clock_out'));}).length;
+    const [temperatureQuery,taskQuery,cleaningQuery,orderQuery,deliveryQuery]=await Promise.all([
+      db.from('haccp_records').select('equipment_name,checklist_data').eq('kind','temperature').eq('record_date',date),
+      db.from('cleaning_tasks').select('id').eq('active',true).eq('frequency','daily'),
+      db.from('cleaning_records').select('task_id,completed_at').gte('completed_at',`${shiftIsoDate(date,-1)}T00:00:00Z`).lt('completed_at',`${shiftIsoDate(date,2)}T00:00:00Z`),
+      db.from('suppliers').select('id').eq('active',true).eq('order_weekday',weekday),
+      db.from('suppliers').select('id').eq('active',true).eq('delivery_weekday',weekday),
+    ]);
+    if(temperatureQuery.error||taskQuery.error||cleaningQuery.error||orderQuery.error||deliveryQuery.error)return fail('Não foi possível calcular todas as tarefas diárias.',500);
+    const temperatureSlots=new Set((temperatureQuery.data||[]).map(row=>`${row.equipment_name}|${row.checklist_data?.period||''}`)),temperatureDone=Math.min(8,temperatureSlots.size);
+    const dailyTaskIds=new Set((taskQuery.data||[]).map(row=>row.id)),cleanedTaskIds=new Set((cleaningQuery.data||[]).filter(row=>dateInTimezone(row.completed_at)==date&&dailyTaskIds.has(row.task_id)).map(row=>row.task_id)),cleaningDone=Math.min(dailyTaskIds.size,cleanedTaskIds.size);
+    const orderIds=(orderQuery.data||[]).map(x=>x.id),deliveryIds=(deliveryQuery.data||[]).map(x=>x.id);
+    const [{data:orderChecks,error:orderChecksError},{data:deliveryChecks,error:deliveryChecksError}]=await Promise.all([
+      orderIds.length?db.from('supplier_order_checks').select('supplier_id').eq('order_date',date).in('supplier_id',orderIds):Promise.resolve({data:[],error:null}),
+      deliveryIds.length?db.from('supplier_delivery_checks').select('supplier_id,status,checked_at').eq('delivery_date',date).in('supplier_id',deliveryIds).order('checked_at',{ascending:false}):Promise.resolve({data:[],error:null}),
+    ]);
+    if(orderChecksError||deliveryChecksError)return fail('Não foi possível calcular as encomendas e entregas.',500);
+    const ordered=new Set((orderChecks||[]).map(x=>x.supplier_id)),latestDelivery=new Map<string,string>();for(const row of deliveryChecks||[])if(!latestDelivery.has(row.supplier_id))latestDelivery.set(row.supplier_id,row.status);
+    const groups=[
+      {label:'Assiduidade',done:attendanceDone,total:expectedShifts.length},
+      {label:'Temperaturas',done:temperatureDone,total:8},
+      {label:'Higienização',done:cleaningDone,total:dailyTaskIds.size},
+      {label:'Encomendas',done:orderIds.filter(id=>ordered.has(id)).length,total:orderIds.length},
+      {label:'Entregas',done:deliveryIds.filter(id=>latestDelivery.get(id)==='received_ok').length,total:deliveryIds.length},
+    ];
+    return reply({date,groups,done:groups.reduce((sum,x)=>sum+x.done,0),total:groups.reduce((sum,x)=>sum+x.total,0)});
+  }
   if(action==='onboarding:status'){
     const revision='welcome-preguica-v4';let query=db.from('staff_onboarding_acknowledgements').select('profile_id,revision,acknowledged_at').eq('revision',revision);
     if(actor.role==='staff')query=query.eq('profile_id',actor.id);
@@ -205,20 +244,22 @@ Deno.serve(async (req: Request) => {
       const {error}=await db.from('staff_onboarding_acknowledgements').upsert({profile_id:actor.id,revision:item.revision,acknowledged_at:new Date().toISOString()},{onConflict:'profile_id,revision'});
       return error?fail('Não foi possível guardar este visto.',400):reply({ok:true,itemKey:item.revision});
     }
+    let responseItems=learningItems;
     if(actor.role==='staff'){
       const {data:acknowledgements,error}=await db.from('staff_onboarding_acknowledgements').select('revision,acknowledged_at').eq('profile_id',actor.id).like('revision','profile-learning-v1:%');
       if(error)return fail('Não foi possível carregar os vistos do perfil.',500);
       const completed=new Map((acknowledgements||[]).map(x=>[x.revision,x.acknowledged_at]));
-      return reply({items:learningItems.map(item=>({...item,acknowledged_at:completed.get(item.revision)||null}))});
+      responseItems=learningItems.map(item=>({...item,acknowledged_at:completed.get(item.revision)||null}));
+      if(actor.id!==RAFAEL_PROFILE_ID)return reply({items:responseItems});
     }
-    const {data:teamProfiles,error:profilesError}=await db.from('profiles').select('id,display_name').eq('active',true).eq('role','staff').order('display_name');
+    const {data:teamProfiles,error:profilesError}=await db.from('profiles').select('id,display_name').eq('active',true).eq('role','staff').neq('id',RAFAEL_PROFILE_ID).order('display_name');
     if(profilesError)return fail('Não foi possível carregar a equipa para o progresso.',500);
     const profileIds=(teamProfiles||[]).map(profile=>profile.id);
     const {data:teamAcknowledgements,error:teamAcknowledgementsError}=profileIds.length?await db.from('staff_onboarding_acknowledgements').select('profile_id,revision').in('profile_id',profileIds).like('revision','profile-learning-v1:%'):{data:[],error:null};
     if(teamAcknowledgementsError)return fail('Não foi possível carregar os vistos da equipa.',500);
     const completedByProfile=new Map<string,string[]>();
     for(const row of teamAcknowledgements||[]){const revisions=completedByProfile.get(row.profile_id)||[];revisions.push(row.revision);completedByProfile.set(row.profile_id,revisions)}
-    return reply({items:learningItems,teamProgress:(teamProfiles||[]).map(profile=>({profile_id:profile.id,display_name:profile.display_name,completed_revisions:completedByProfile.get(profile.id)||[]}))});
+    return reply({items:responseItems,teamProgress:(teamProfiles||[]).map(profile=>({profile_id:profile.id,display_name:profile.display_name,completed_revisions:completedByProfile.get(profile.id)||[]}))});
   }
   if(action==='onboarding:modules:save'){
     if(!canManage(actor))return fail('Só a Gerência pode editar os textos de integração.',403);
