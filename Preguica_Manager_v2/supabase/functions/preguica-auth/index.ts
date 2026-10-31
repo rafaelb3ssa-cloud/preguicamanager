@@ -172,10 +172,10 @@ Deno.serve(async (req: Request) => {
     let expectedShifts:any[]=[];
     if(schedule){const {data,error}=await db.from('shifts').select('id,staff_id').eq('schedule_id',schedule.id).eq('shift_date',date);if(error)return fail('Não foi possível carregar os turnos de hoje.',500);expectedShifts=data||[];}
     const shiftIds=expectedShifts.map(x=>x.id);
-    const {data:attendanceRows,error:attendanceError}=shiftIds.length?await db.from('attendance_records').select('shift_id,kind').in('shift_id',shiftIds):{data:[],error:null};
+    const {data:attendanceRows,error:attendanceError}=shiftIds.length?await db.from('attendance_records').select('shift_id,kind,status').in('shift_id',shiftIds):{data:[],error:null};
     if(attendanceError)return fail('Não foi possível calcular a assiduidade da equipa.',500);
-    const attendanceByShift=new Map<string,string[]>();for(const row of attendanceRows||[]){const kinds=attendanceByShift.get(row.shift_id)||[];kinds.push(row.kind);attendanceByShift.set(row.shift_id,kinds);}
-    const attendanceDone=expectedShifts.filter(shift=>{const kinds=attendanceByShift.get(shift.id)||[];return kinds.some(kind=>['absence','medical_leave','vacation'].includes(kind))||(kinds.includes('clock_in')&&kinds.includes('clock_out'));}).length;
+    const attendanceByShift=new Map<string,string[]>();for(const row of attendanceRows||[]){if(['cancelled','rejected'].includes(String(row.status||'')))continue;const kinds=attendanceByShift.get(row.shift_id)||[];kinds.push(row.kind);attendanceByShift.set(row.shift_id,kinds);}
+    const attendanceStats=expectedShifts.reduce((stats,shift)=>{const kinds=attendanceByShift.get(shift.id)||[],incident=kinds.some(kind=>['absence','medical_leave','vacation'].includes(kind)),cin=kinds.includes('clock_in'),cout=kinds.includes('clock_out');if(incident){stats.punches+=2;stats.registeredShifts++;}else{stats.punches+=Number(cin)+Number(cout);if(cin||cout)stats.registeredShifts++;}return stats;},{punches:0,registeredShifts:0});
     const [temperatureQuery,taskQuery,cleaningQuery,orderQuery,deliveryQuery]=await Promise.all([
       db.from('haccp_records').select('equipment_name,checklist_data').eq('kind','temperature').eq('record_date',date),
       db.from('cleaning_tasks').select('id').eq('active',true).eq('frequency','daily'),
@@ -194,7 +194,7 @@ Deno.serve(async (req: Request) => {
     if(orderChecksError||deliveryChecksError)return fail('Não foi possível calcular as encomendas e entregas.',500);
     const ordered=new Set((orderChecks||[]).map(x=>x.supplier_id)),latestDelivery=new Map<string,string>();for(const row of deliveryChecks||[])if(!latestDelivery.has(row.supplier_id))latestDelivery.set(row.supplier_id,row.status);
     const groups=[
-      {label:'Assiduidade',done:attendanceDone,total:expectedShifts.length},
+      {label:'Assiduidade · turnos com registo',done:attendanceStats.punches,total:expectedShifts.length*2,displayDone:attendanceStats.registeredShifts,displayTotal:expectedShifts.length},
       {label:'Temperaturas',done:temperatureDone,total:8},
       {label:'Higienização',done:cleaningDone,total:dailyTaskIds.size},
       {label:'Encomendas',done:orderIds.filter(id=>ordered.has(id)).length,total:orderIds.length},
