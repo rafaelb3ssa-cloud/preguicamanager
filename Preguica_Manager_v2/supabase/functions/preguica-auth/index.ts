@@ -583,7 +583,7 @@ Deno.serve(async (req: Request) => {
   if (action === 'schedule:list') {
     const week=String(body.weekStart||''); if(!validDate(week))return fail('Indica a segunda-feira da semana.');
     let schedule:any=null;
-    if(canManageSchedule(actor)){
+    if(canManageSchedule(actor)&&body.publishedOnly!==true){
       const {data:drafts,error:draftError}=await db.from('weekly_schedules').select('id,week_start,version,status,published_at,accumulated_hours').eq('week_start',week).eq('status','draft').order('version',{ascending:false}).limit(1);
       if(draftError)return fail('Não foi possível carregar o rascunho do horário.',500);
       schedule=drafts?.[0]||null;
