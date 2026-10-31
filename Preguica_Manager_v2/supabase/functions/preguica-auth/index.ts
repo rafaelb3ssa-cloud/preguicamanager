@@ -528,11 +528,20 @@ Deno.serve(async (req: Request) => {
 
   if (action === 'schedule:list') {
     const week=String(body.weekStart||''); if(!validDate(week))return fail('Indica a segunda-feira da semana.');
-    const {data:schedules,error}=await db.from('weekly_schedules').select('id,week_start,version,status,published_at,accumulated_hours').eq('week_start',week).in('status',actor.role==='staff'?['published']:['draft','published']).order('version',{ascending:false}).limit(1);
-    if(error)return fail('Não foi possível carregar o horário.',500); const schedule=schedules?.[0];
-    // Staff may view the full published team schedule; draft schedules remain manager-only.
+    let schedule:any=null;
+    if(canManageSchedule(actor)){
+      const {data:drafts,error:draftError}=await db.from('weekly_schedules').select('id,week_start,version,status,published_at,accumulated_hours').eq('week_start',week).eq('status','draft').order('version',{ascending:false}).limit(1);
+      if(draftError)return fail('Não foi possível carregar o rascunho do horário.',500);
+      schedule=drafts?.[0]||null;
+    }
+    if(!schedule){
+      const {data:published,error:publishedError}=await db.from('weekly_schedules').select('id,week_start,version,status,published_at,accumulated_hours').eq('week_start',week).eq('status','published').order('version',{ascending:false}).limit(1);
+      if(publishedError)return fail('Não foi possível carregar o horário.',500);
+      schedule=published?.[0]||null;
+    }
+    // A schedule manager sees an in-progress draft first; everyone else sees only the latest published version.
     let profileQuery=db.from('profiles').select('id,display_name,weekly_hours').eq('active',true).eq('role','staff').eq('schedule_access',true).order('display_name');
-    let shiftQuery=schedule?db.from('shifts').select('id,staff_id,shift_date,starts_at,ends_at,break_minutes,notes').eq('schedule_id',schedule.id).order('shift_date'):null;
+    let shiftQuery=schedule?db.from('shifts').select('id,staff_id,shift_date,starts_at,ends_at,break_minutes,notes').eq('schedule_id',schedule.id).order('shift_date').order('starts_at'):null;
     const [profiles,shifts]=await Promise.all([profileQuery,shiftQuery||Promise.resolve({data:[],error:null})]);
     const {data:allSchedules,error:allError}=await db.from('weekly_schedules').select('id,week_start,version,accumulated_hours').eq('status','published').lte('week_start',week).order('week_start',{ascending:true}).order('version',{ascending:false});
     if(allError)return fail('Não foi possível calcular as horas acumuladas.',500);
@@ -565,15 +574,33 @@ Deno.serve(async (req: Request) => {
     const week=String(body.weekStart||''), items=Array.isArray(body.shifts)?body.shifts:[]; if(!validDate(week)||items.length>80)return fail('Horário inválido.');
     const existing=await db.from('weekly_schedules').select('id,version').eq('week_start',week).eq('status','draft').order('version',{ascending:false}).limit(1).maybeSingle();
     let schedule=existing.data;
-    if(!schedule){const prior=await db.from('weekly_schedules').select('version,accumulated_hours').eq('week_start',week).order('version',{ascending:false}).limit(1).maybeSingle();const made=await db.from('weekly_schedules').insert({week_start:week,version:(prior.data?.version||0)+1,status:'draft',accumulated_hours:prior.data?.accumulated_hours||{}}).select('id,version').single();if(made.error)return fail('Não foi possível criar o rascunho.',400);schedule=made.data;}
-    const clean=[]; for(const s of items){if(!validDate(String(s.date||''))||String(s.date)<week||String(s.date)>=new Date(Date.parse(week+'T00:00:00Z')+7*86400000).toISOString().slice(0,10)||new Date(`${String(s.date)}T12:00:00Z`).getUTCDay()===0||!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(s.start||''))||!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(s.end||''))||!/^[0-9a-f-]{36}$/i.test(String(s.staffId||'')))return fail('Há um turno inválido. Ao domingo a equipa está sempre de folga.');clean.push({schedule_id:schedule.id,staff_id:s.staffId,shift_date:s.date,starts_at:s.start,ends_at:s.end,break_minutes:Math.max(0,Number(s.breakMinutes)||0),notes:String(s.notes||'').slice(0,300)});}
+    if(existing.error)return fail('Não foi possível carregar o rascunho do horário.',500);
+    if(!schedule){const prior=await db.from('weekly_schedules').select('version,accumulated_hours').eq('week_start',week).order('version',{ascending:false}).limit(1).maybeSingle();if(prior.error)return fail('Não foi possível consultar a versão atual do horário.',500);const made=await db.from('weekly_schedules').insert({week_start:week,version:(prior.data?.version||0)+1,status:'draft',accumulated_hours:prior.data?.accumulated_hours||{}}).select('id,version').single();if(made.error)return fail('Não foi possível criar o rascunho.',400);schedule=made.data;}
+    else {
+      const {data:latestPublished,error:publishedError}=await db.from('weekly_schedules').select('version').eq('week_start',week).eq('status','published').order('version',{ascending:false}).limit(1).maybeSingle();
+      if(publishedError)return fail('Não foi possível consultar a versão publicada do horário.',500);
+      if(latestPublished&&schedule.version<=latestPublished.version){
+        const {data:latestAny,error:latestError}=await db.from('weekly_schedules').select('version').eq('week_start',week).order('version',{ascending:false}).limit(1).maybeSingle();
+        if(latestError)return fail('Não foi possível numerar o rascunho do horário.',500);
+        const nextVersion=(latestAny?.version||latestPublished.version)+1;
+        const {error:updateError}=await db.from('weekly_schedules').update({version:nextVersion}).eq('id',schedule.id).eq('status','draft');
+        if(updateError)return fail('Não foi possível preparar uma nova versão do rascunho.',400);
+        schedule={...schedule,version:nextVersion};
+      }
+    }
+    const clean=[]; for(const s of items){if(!validDate(String(s.date||''))||String(s.date)<week||String(s.date)>=new Date(Date.parse(week+'T00:00:00Z')+7*86400000).toISOString().slice(0,10)||new Date(`${String(s.date)}T12:00:00Z`).getUTCDay()===0||!/^([01]\d|2[0-3]):(?:00|30)$/.test(String(s.start||''))||!/^([01]\d|2[0-3]):(?:00|30)$/.test(String(s.end||''))||String(s.start)===String(s.end)||!/^[0-9a-f-]{36}$/i.test(String(s.staffId||'')))return fail('Há um turno inválido. Escolhe horas em intervalos de 30 minutos, início e fim diferentes; ao domingo a equipa está de folga.');clean.push({schedule_id:schedule.id,staff_id:s.staffId,shift_date:s.date,starts_at:s.start,ends_at:s.end,break_minutes:Math.max(0,Number(s.breakMinutes)||0),notes:String(s.notes||'').slice(0,300)});}
     const staffIds=[...new Set(clean.map(x=>x.staff_id))]; if(staffIds.length){const {data:validStaff,error:staffError}=await db.from('profiles').select('id').in('id',staffIds).eq('active',true).eq('role','staff').eq('schedule_access',true);if(staffError||validStaff?.length!==staffIds.length)return fail('O horário pode incluir apenas colaboradoras ativas.',403)}
     await db.from('shifts').delete().eq('schedule_id',schedule.id); if(clean.length){const {error}=await db.from('shifts').insert(clean);if(error)return fail('Não foi possível guardar os turnos.',400)} return reply({ok:true,scheduleId:schedule.id});
   }
   if (action === 'schedule:publish') {
     if(!canManageSchedule(actor))return fail('Este perfil não pode publicar horários.',403);
     const id=String(body.scheduleId||''); if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Horário inválido.');
-    const {error}=await db.from('weekly_schedules').update({status:'published',published_by:actor.id,published_at:new Date().toISOString()}).eq('id',id).eq('status','draft');
+    const {data:draft,error:draftError}=await db.from('weekly_schedules').select('id,week_start,version').eq('id',id).eq('status','draft').maybeSingle();
+    if(draftError)return fail('Não foi possível carregar o rascunho.',500);if(!draft)return fail('Este rascunho já foi publicado ou deixou de estar disponível.',409);
+    const {data:latestPublished,error:publishedError}=await db.from('weekly_schedules').select('version').eq('week_start',draft.week_start).eq('status','published').order('version',{ascending:false}).limit(1).maybeSingle();
+    if(publishedError)return fail('Não foi possível consultar a versão publicada do horário.',500);
+    const version=latestPublished&&draft.version<=latestPublished.version?latestPublished.version+1:draft.version;
+    const {error}=await db.from('weekly_schedules').update({version,status:'published',published_by:actor.id,published_at:new Date().toISOString()}).eq('id',id).eq('status','draft');
     return error?fail('Não foi possível publicar o horário.',400):reply({ok:true});
   }
 
