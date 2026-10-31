@@ -170,7 +170,7 @@ Deno.serve(async (req: Request) => {
     const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('week_start',week).eq('status','published').order('version',{ascending:false}).limit(1).maybeSingle();
     if(scheduleError)return fail('Não foi possível carregar o horário publicado.',500);
     let expectedShifts:any[]=[];
-    if(schedule){const {data,error}=await db.from('shifts').select('id,staff_id').eq('schedule_id',schedule.id).eq('shift_date',date);if(error)return fail('Não foi possível carregar os turnos de hoje.',500);expectedShifts=data||[];}
+    if(schedule){const {data,error}=await db.from('shifts').select('id,staff_id').eq('schedule_id',schedule.id).eq('shift_date',date).neq('staff_id',RAFAEL_PROFILE_ID);if(error)return fail('Não foi possível carregar os turnos de hoje.',500);expectedShifts=data||[];}
     const shiftIds=expectedShifts.map(x=>x.id);
     const {data:attendanceRows,error:attendanceError}=shiftIds.length?await db.from('attendance_records').select('shift_id,kind,status').in('shift_id',shiftIds):{data:[],error:null};
     if(attendanceError)return fail('Não foi possível calcular a assiduidade da equipa.',500);
