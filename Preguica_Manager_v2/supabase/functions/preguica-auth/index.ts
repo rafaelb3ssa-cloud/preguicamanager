@@ -167,6 +167,7 @@ Deno.serve(async (req: Request) => {
   if(action==='dashboard:daily-progress'){
     if(!canManage(actor)&&actor.id!==RAFAEL_PROFILE_ID)return fail('Este resumo está disponível apenas à Gerência e ao Rafael Bessa.',403);
     const date=lisbonToday(),week=mondayOf(date),weekday=((new Date(`${date}T12:00:00Z`).getUTCDay()+6)%7)+1;
+    if(weekday===7){const groups=[{label:'Assiduidade · turnos com registo',done:0,total:0,displayDone:0,displayTotal:0},{label:'Temperaturas',done:0,total:0},{label:'Higienização',done:0,total:0},{label:'Encomendas',done:0,total:0},{label:'Entregas',done:0,total:0}];return reply({date,closed:true,groups,attendanceStatus:{completed:0,total:0,people:[]},done:0,total:0});}
     const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('week_start',week).eq('status','published').order('version',{ascending:false}).limit(1).maybeSingle();
     if(scheduleError)return fail('Não foi possível carregar o horário publicado.',500);
     let expectedShifts:any[]=[];
