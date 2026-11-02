@@ -159,7 +159,7 @@ Deno.serve(async (req: Request) => {
     if (employmentError || insuranceError) return fail('Não foi possível carregar os dados do perfil.',500);
     return reply({employmentStartDate:employment?.start_date||null,insurance:insurance?{providerName:insurance.provider_name,policyNumber:insurance.policy_number}:null});
   }
-  const staffActions=new Set(['pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','dashboard:daily-progress']);
+  const staffActions=new Set(['stock:list','inventory:monthly:get','inventory:monthly:start','inventory:monthly:save','pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','dashboard:daily-progress']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
   if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list','schedule:save','schedule:publish'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
   if(actor.role==='staff'&&!actor.attendance_access&&action.startsWith('attendance:'))return fail('Este perfil não tem acesso ao registo de assiduidade.',403);
@@ -344,7 +344,7 @@ Deno.serve(async (req: Request) => {
 
   if (action === 'stock:list') {
     const { data, error } = await db.from('stock_items').select('id,name,category,unit,quantity,minimum_quantity,supplier_name,unit_cost_ex_vat,active').eq('active', true).order('category').order('name');
-    return error ? fail('Não foi possível carregar o inventário.', 500) : reply({ items: (data || []).map(({unit_cost_ex_vat,...item})=>actor.role==='staff'?item:{...item,unit_cost_ex_vat}) });
+    return error ? fail('Não foi possível carregar o inventário.', 500) : reply({ items: (data || []).map(({unit_cost_ex_vat,...item})=>(canManage(actor)||actor.id===RAFAEL_PROFILE_ID)?{...item,unit_cost_ex_vat}:{...item}) });
   }
   if (action === 'stock:quantity') {
     const quantity = Number(body.quantity), id = String(body.itemId || '');
@@ -387,28 +387,26 @@ Deno.serve(async (req: Request) => {
   }
 
   if (action.startsWith('inventory:monthly:')) {
-    if (!canManage(actor)) return fail('O inventário mensal está disponível apenas à Gerência.',403);
+    const canEditPrices=canManage(actor)||actor.id===RAFAEL_PROFILE_ID;
+    const safeCount=(count)=>!count||canEditPrices?count:{...count,items:(Array.isArray(count.items)?count.items:[]).map(({unit_cost_ex_vat,...item})=>item)};
     const month=String(body.month||'');
-    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return fail('Seleciona um mês válido.');
+    if(!/^\\d{4}-(0[1-9]|1[0-2])$/.test(month))return fail('Seleciona um mês válido.');
     const inventoryMonth=`${month}-01`;
     if(action==='inventory:monthly:get'){
       const {data,error}=await db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').eq('inventory_month',inventoryMonth).maybeSingle();
       if(error)return fail('Não foi possível carregar o inventário mensal.',500);
-      const today=lisbonToday(),canStart=today.slice(0,7)===month&&Number(today.slice(8,10))<=7;
-      return reply({count:data||null,canStart});
+      return reply({count:safeCount(data||null),canStart:!data,canEditPrices});
     }
     if(action==='inventory:monthly:start'){
-      const today=lisbonToday();
-      if(today.slice(0,7)!==month||Number(today.slice(8,10))>7)return fail('A contagem mensal só pode ser iniciada durante a primeira semana (dias 1 a 7) do mês selecionado.');
       const {data:existing,error:readError}=await db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').eq('inventory_month',inventoryMonth).maybeSingle();
       if(readError)return fail('Não foi possível verificar a contagem mensal.',500);
-      if(existing)return reply({count:existing,alreadyStarted:true});
+      if(existing)return reply({count:safeCount(existing),alreadyStarted:true,canEditPrices});
       const {data:products,error:stockError}=await db.from('stock_items').select('id,name,category,unit,unit_cost_ex_vat').eq('active',true).order('category').order('name');
       if(stockError)return fail('Não foi possível preparar os artigos do inventário.',500);
       const items=(products||[]).map(x=>({stock_item_id:x.id,name:x.name,category:x.category||'Outros',unit:x.unit,counted_quantity:null,unit_cost_ex_vat:x.unit_cost_ex_vat==null?null:Number(x.unit_cost_ex_vat)}));
       const {data,error}=await db.from('monthly_inventory_counts').insert({inventory_month:inventoryMonth,items,created_by:actor.id,updated_by:actor.id}).select('id,inventory_month,items,created_at,updated_at').single();
-      if(error){if(error.code==='23505'){const again=await db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').eq('inventory_month',inventoryMonth).maybeSingle();if(again.data)return reply({count:again.data,alreadyStarted:true})}return fail('Não foi possível iniciar a contagem mensal.',400)}
-      return reply({count:data});
+      if(error){if(error.code==='23505'){const again=await db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').eq('inventory_month',inventoryMonth).maybeSingle();if(again.data)return reply({count:safeCount(again.data),alreadyStarted:true,canEditPrices})}return fail('Não foi possível iniciar a contagem mensal.',400)}
+      return reply({count:safeCount(data),canEditPrices});
     }
     if(action==='inventory:monthly:save'){
       const {data:count,error:readError}=await db.from('monthly_inventory_counts').select('id,items').eq('inventory_month',inventoryMonth).maybeSingle();
@@ -416,12 +414,26 @@ Deno.serve(async (req: Request) => {
       if(!count)return fail('Inicia primeiro a contagem mensal.');
       const incoming=Array.isArray(body.items)?body.items:[];
       if(incoming.length>500)return fail('A lista de artigos excede o limite.');
-      const values=new Map<string,number|null>();
-      for(const value of incoming){const row=value&&typeof value==='object'?value as Record<string,unknown>:{};const id=String(row.stockItemId||'');const raw=row.countedQuantity;if(!/^[0-9a-f-]{36}$/i.test(id)||(raw!==null&&(!Number.isFinite(Number(raw))||Number(raw)<0)))return fail('Há uma quantidade de inventário inválida.');values.set(id,raw===null?null:Number(raw))}
+      const values=new Map<string,number|null>(),prices=new Map<string,number|null>();
+      for(const value of incoming){
+        const row=value&&typeof value==='object'?value as Record<string,unknown>:{},id=String(row.stockItemId||''),raw=row.countedQuantity;
+        if(!/^[0-9a-f-]{36}$/i.test(id)||(raw!==null&&(!Number.isFinite(Number(raw))||Number(raw)<0)))return fail('Há uma quantidade de inventário inválida.');
+        values.set(id,raw===null?null:Number(raw));
+        if(Object.prototype.hasOwnProperty.call(row,'unitCostExVat')){
+          if(!canEditPrices)return fail('Não tens permissão para alterar os preços do inventário.',403);
+          const cost=row.unitCostExVat;
+          if(cost!==null&&(!Number.isFinite(Number(cost))||Number(cost)<0))return fail('Há um preço unitário inválido.');
+          prices.set(id,cost===null?null:Number(cost));
+        }
+      }
       const snapshot=Array.isArray(count.items)?count.items as Array<Record<string,unknown>>:[];
-      const items=snapshot.map(x=>({...x,counted_quantity:values.has(String(x.stock_item_id))?values.get(String(x.stock_item_id)):x.counted_quantity??null}));
+      const items=snapshot.map(x=>({...x,counted_quantity:values.has(String(x.stock_item_id))?values.get(String(x.stock_item_id)):x.counted_quantity??null,unit_cost_ex_vat:prices.has(String(x.stock_item_id))?prices.get(String(x.stock_item_id)):x.unit_cost_ex_vat??null}));
+      for(const [id,cost] of prices){
+        const {error}=await db.from('stock_items').update({unit_cost_ex_vat:cost,updated_by:actor.id,updated_at:new Date().toISOString()}).eq('id',id).eq('active',true);
+        if(error)return fail('A contagem foi validada, mas não foi possível atualizar um preço do inventário.',400);
+      }
       const {data,error}=await db.from('monthly_inventory_counts').update({items,updated_by:actor.id,updated_at:new Date().toISOString()}).eq('id',count.id).select('id,inventory_month,items,created_at,updated_at').single();
-      return error?fail('Não foi possível guardar a contagem mensal.',400):reply({count:data});
+      return error?fail('Não foi possível guardar a contagem mensal.',400):reply({count:safeCount(data),canEditPrices});
     }
   }
 
