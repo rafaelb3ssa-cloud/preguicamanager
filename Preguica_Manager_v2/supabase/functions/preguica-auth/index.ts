@@ -159,7 +159,7 @@ Deno.serve(async (req: Request) => {
     if (employmentError || insuranceError) return fail('Não foi possível carregar os dados do perfil.',500);
     return reply({employmentStartDate:employment?.start_date||null,insurance:insurance?{providerName:insurance.provider_name,policyNumber:insurance.policy_number}:null});
   }
-  const staffActions=new Set(['stock:list','inventory:monthly:get','inventory:monthly:start','inventory:monthly:save','pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','dashboard:daily-progress']);
+  const staffActions=new Set(['stock:list','stock:minimum','stock:rename','stock:price','inventory:monthly:get','inventory:monthly:start','inventory:monthly:save','pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','dashboard:daily-progress']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
   if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list','schedule:save','schedule:publish'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
   if(actor.role==='staff'&&!actor.attendance_access&&action.startsWith('attendance:'))return fail('Este perfil não tem acesso ao registo de assiduidade.',403);
@@ -382,6 +382,16 @@ Deno.serve(async (req: Request) => {
     if(!/^[0-9a-f-]{36}$/i.test(itemId)||!name||name.length>120)return fail('Indica um nome válido para o artigo.');
     const {data,error}=await db.from('stock_items').update({name,updated_by:actor.id,updated_at:new Date().toISOString()}).eq('id',itemId).eq('active',true).select('id').maybeSingle();
     if(error)return fail('Não foi possível guardar o nome do artigo.',400);
+    if(!data)return fail('Artigo não encontrado ou inativo.',404);
+    return reply({ok:true});
+  }
+
+  if (action === 'stock:price') {
+    if(!canManage(actor)&&actor.id!==RAFAEL_PROFILE_ID)return fail('Sem permissão para alterar preços.',403);
+    const itemId=String(body.itemId||''),raw=body.price,price=raw===null?null:Number(raw);
+    if(!/^[0-9a-f-]{36}$/i.test(itemId)||(price!==null&&(!Number.isFinite(price)||price<0)))return fail('Preço inválido.');
+    const {data,error}=await db.from('stock_items').update({unit_cost_ex_vat:price,updated_by:actor.id,updated_at:new Date().toISOString()}).eq('id',itemId).eq('active',true).select('id').maybeSingle();
+    if(error)return fail('Não foi possível guardar o preço.',400);
     if(!data)return fail('Artigo não encontrado ou inativo.',404);
     return reply({ok:true});
   }
