@@ -393,9 +393,12 @@ Deno.serve(async (req: Request) => {
     if(!/^\\d{4}-(0[1-9]|1[0-2])$/.test(month))return fail('Seleciona um mês válido.');
     const inventoryMonth=`${month}-01`;
     if(action==='inventory:monthly:get'){
-      const {data,error}=await db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').eq('inventory_month',inventoryMonth).maybeSingle();
-      if(error)return fail('Não foi possível carregar o inventário mensal.',500);
-      return reply({count:safeCount(data||null),canStart:!data,canEditPrices});
+      const [{data,error},{data:previous,error:previousError}]=await Promise.all([
+        db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').eq('inventory_month',inventoryMonth).maybeSingle(),
+        db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').lt('inventory_month',inventoryMonth).order('inventory_month',{ascending:false}).limit(1).maybeSingle(),
+      ]);
+      if(error||previousError)return fail('Não foi possível carregar o inventário mensal.',500);
+      return reply({count:safeCount(data||null),previousCount:safeCount(previous||null),canStart:!data,canEditPrices});
     }
     if(action==='inventory:monthly:start'){
       const {data:existing,error:readError}=await db.from('monthly_inventory_counts').select('id,inventory_month,items,created_at,updated_at').eq('inventory_month',inventoryMonth).maybeSingle();
