@@ -160,7 +160,76 @@ Deno.serve(async (req: Request) => {
     return reply({employmentStartDate:employment?.start_date||null,insurance:insurance?{providerName:insurance.provider_name,policyNumber:insurance.policy_number}:null});
   }
   const staffActions=new Set(['stock:list','stock:quantity','stock:minimum','stock:rename','stock:price','stock:create','inventory:monthly:get','inventory:monthly:start','inventory:monthly:save','pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','dashboard:daily-progress']);
-  if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
+  if(actor.role==='staff'&&!staffActions.has(action)&&!action.startsWith('invoice:'))return fail('Este módulo está disponível apenas à Gerência.',403);
+
+  const invoiceActions=new Set(['invoice:list','invoice:upload-start','invoice:upload-finish','invoice:download','invoice:delete','invoice:bundle-links']);
+  const canAccessInvoices=(profile:Profile)=>canManage(profile)||profile.id===RAFAEL_PROFILE_ID;
+  if(invoiceActions.has(action)&&!canAccessInvoices(actor))return fail('As faturas estão disponíveis apenas à Gerência e ao Rafael Bessa.',403);
+  if(action.startsWith('invoice:')&&!invoiceActions.has(action))return fail('Ação de faturas desconhecida.',404);
+  const validInvoiceMime=new Set(['image/jpeg','image/png','image/webp','image/heic','image/heif','application/pdf']);
+  const invoiceFields='id,invoice_date,supplier_name,invoice_number,description,amount,currency,original_filename,content_type,file_size,upload_status,created_at';
+  const invoiceBucket=db.storage.from('cafe-invoices');
+  if(action==='invoice:upload-start'){
+    const invoiceDate=String(body.invoiceDate||''),supplier=String(body.supplier||'').trim(),invoiceNumber=String(body.invoiceNumber||'').trim(),description=String(body.description||'').trim(),amount=Number(body.amount),fileName=String(body.fileName||'').split(/[\\/]/).pop()||'fatura',contentType=String(body.contentType||'').toLowerCase(),fileSize=Number(body.fileSize);
+    if(!validDate(invoiceDate)||!supplier||supplier.length>160||invoiceNumber.length>100||description.length>500||!Number.isFinite(amount)||amount<0||amount>9999999999.99||!Number.isInteger(fileSize)||fileSize<1||fileSize>20971520||!validInvoiceMime.has(contentType))return fail('Confirma data, fornecedor, valor e ficheiro (até 20 MB).');
+    const extension=contentType==='application/pdf'?'pdf':contentType==='image/jpeg'?'jpg':contentType.split('/')[1];
+    const storagePath=`${invoiceDate.slice(0,7).replace('-','/')}/${crypto.randomUUID()}.${extension}`;
+    const {data:signed,error:signedError}=await invoiceBucket.createSignedUploadUrl(storagePath,{upsert:false});
+    if(signedError||!signed?.token)return fail('Não foi possível preparar o carregamento privado.',500);
+    const {data:doc,error:insertError}=await db.from('invoice_documents').insert({invoice_date:invoiceDate,supplier_name:supplier,invoice_number:invoiceNumber||null,description:description||null,amount:amount.toFixed(2),currency:'EUR',storage_path:storagePath,original_filename:fileName.slice(0,240),content_type:contentType,file_size:fileSize,uploaded_by:actor.id,upload_status:'pending'}).select('id').single();
+    if(insertError)return fail('Não foi possível registar a fatura.',500);
+    return reply({id:doc.id,path:storagePath,token:signed.token});
+  }
+  if(action==='invoice:upload-finish'){
+    const id=String(body.id||'');
+    const {data:doc,error:docError}=await db.from('invoice_documents').select('id,storage_path,uploaded_by,file_size,upload_status').eq('id',id).maybeSingle();
+    if(docError||!doc||doc.uploaded_by!==actor.id)return fail('Carregamento não encontrado para esta sessão.',404);
+    if(doc.upload_status==='available')return reply({ok:true});
+    const {data:info,error:infoError}=await invoiceBucket.info(doc.storage_path);
+    const actualSize=Number(info?.metadata?.size??info?.size??0);
+    if(infoError||!info||actualSize!==Number(doc.file_size))return fail('O ficheiro ainda não foi recebido por completo.',400);
+    const {error:updateError}=await db.from('invoice_documents').update({upload_status:'available'}).eq('id',doc.id);
+    return updateError?fail('O ficheiro foi enviado mas não foi possível concluir o registo.',500):reply({ok:true});
+  }
+  if(action==='invoice:list'){
+    const month=String(body.month||'');
+    if(!/^\\d{4}-\\d{2}$/.test(month))return fail('Seleciona um mês válido.');
+    const start=month+'-01',end=shiftIsoDate(month+'-01',32).slice(0,7)+'-01';
+    const {data,error}=await db.from('invoice_documents').select(invoiceFields).eq('upload_status','available').gte('invoice_date',start).lt('invoice_date',end).order('invoice_date',{ascending:false}).order('created_at',{ascending:false}).limit(500);
+    if(error)return fail('Não foi possível carregar as faturas.',500);
+    const rows=data||[],total=rows.reduce((sum,row)=>sum+Number(row.amount||0),0);
+    const first=new Date(start+'T12:00:00Z');first.setUTCMonth(first.getUTCMonth()-5);const chartFrom=first.toISOString().slice(0,7)+'-01';
+    const {data:chartRows,error:chartError}=await db.from('invoice_documents').select('invoice_date,amount').eq('upload_status','available').gte('invoice_date',chartFrom).lt('invoice_date',end);
+    if(chartError)return fail('Não foi possível carregar o gráfico mensal.',500);
+    const buckets=new Map();for(let offset=0;offset<6;offset++){const d=new Date(start+'T12:00:00Z');d.setUTCMonth(d.getUTCMonth()+offset-5);const key=d.toISOString().slice(0,7);buckets.set(key,{month:key,count:0,total:0})}
+    for(const row of chartRows||[]){const key=String(row.invoice_date).slice(0,7),bucket=buckets.get(key);if(bucket){bucket.count++;bucket.total+=Number(row.amount||0)}}
+    return reply({items:rows.map(row=>({...row,amount:Number(row.amount)})),count:rows.length,total,months:[...buckets.values()]});
+  }
+  if(action==='invoice:bundle-links'){
+    const month=String(body.month||'');
+    if(!/^\\d{4}-\\d{2}$/.test(month))return fail('Seleciona um mês válido.');
+    const start=month+'-01',d=new Date(start+'T12:00:00Z');d.setUTCMonth(d.getUTCMonth()+1);const end=d.toISOString().slice(0,10);
+    const {data,error}=await db.from('invoice_documents').select(invoiceFields+',storage_path').eq('upload_status','available').gte('invoice_date',start).lt('invoice_date',end).order('invoice_date',{ascending:true}).order('created_at',{ascending:true}).limit(151);
+    if(error)return fail('Não foi possível preparar o arquivo do mês.',500);
+    const rows=data||[];if(rows.length>150)return fail('O mês tem mais de 150 documentos; descarrega-os individualmente.');
+    const total=rows.reduce((sum,row)=>sum+Number(row.amount||0),0),links=await Promise.all(rows.map(async row=>{const {data:signed,error:signedError}=await invoiceBucket.createSignedUrl(row.storage_path,600);if(signedError)throw signedError;return{...row,amount:Number(row.amount),url:signed.signedUrl}}));
+    return reply({items:links,count:rows.length,total});
+  }
+  if(action==='invoice:download'){
+    const id=String(body.id||''),{data:doc,error}=await db.from('invoice_documents').select(invoiceFields+',storage_path').eq('id',id).eq('upload_status','available').maybeSingle();
+    if(error||!doc)return fail('Fatura não encontrada.',404);
+    const {data:signed,error:signedError}=await invoiceBucket.createSignedUrl(doc.storage_path,180,{download:true});
+    return signedError?fail('Não foi possível abrir o ficheiro.',500):reply({url:signed.signedUrl});
+  }
+  if(action==='invoice:delete'){
+    const id=String(body.id||''),{data:doc,error}=await db.from('invoice_documents').select('id,storage_path').eq('id',id).maybeSingle();
+    if(error||!doc)return fail('Fatura não encontrada.',404);
+    const {error:storageError}=await invoiceBucket.remove([doc.storage_path]);
+    if(storageError)return fail('Não foi possível apagar o ficheiro do arquivo.',500);
+    const {error:deleteError}=await db.from('invoice_documents').delete().eq('id',id);
+    return deleteError?fail('Ficheiro apagado, mas o registo não foi removido. Contacta o suporte.',500):reply({ok:true});
+  }
+
   if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list','schedule:save','schedule:publish'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
   if(actor.role==='staff'&&!actor.attendance_access&&action.startsWith('attendance:'))return fail('Este perfil não tem acesso ao registo de assiduidade.',403);
 
