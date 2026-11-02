@@ -167,7 +167,7 @@ Deno.serve(async (req: Request) => {
   if(action==='dashboard:daily-progress'){
     if(!canManage(actor)&&actor.id!==RAFAEL_PROFILE_ID)return fail('Este resumo está disponível apenas à Gerência e ao Rafael Bessa.',403);
     const date=lisbonToday(),week=mondayOf(date),weekday=((new Date(`${date}T12:00:00Z`).getUTCDay()+6)%7)+1;
-    if(weekday===7){const groups=[{label:'Assiduidade · turnos com registo',done:0,total:0,displayDone:0,displayTotal:0},{label:'Temperaturas',done:0,total:0},{label:'Higienização',done:0,total:0},{label:'Encomendas',done:0,total:0},{label:'Entregas',done:0,total:0}];return reply({date,closed:true,groups,attendanceStatus:{completed:0,total:0,people:[]},done:0,total:0});}
+    if(weekday===7){const groups=[{label:'Assiduidade · turnos com registo',done:0,total:0,displayDone:0,displayTotal:0},{label:'Temperaturas',done:0,total:0},{label:'Higienização',done:0,total:0},{label:'Entregas',done:0,total:0}];return reply({date,closed:true,groups,attendanceStatus:{completed:0,total:0,people:[]},done:0,total:0});}
     const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('week_start',week).eq('status','published').order('version',{ascending:false}).limit(1).maybeSingle();
     if(scheduleError)return fail('Não foi possível carregar o horário publicado.',500);
     let expectedShifts:any[]=[];
@@ -180,28 +180,24 @@ Deno.serve(async (req: Request) => {
     const todayStaffIds=[...new Set(expectedShifts.map(shift=>shift.staff_id))],{data:todayStaff,error:todayStaffError}=todayStaffIds.length?await db.from('profiles').select('id,display_name').in('id',todayStaffIds).eq('active',true).eq('role','staff').neq('id',RAFAEL_PROFILE_ID):{data:[],error:null};
     if(todayStaffError)return fail('Não foi possível associar os registos às colaboradoras.',500);
     const attendancePeople=(todayStaff||[]).map(profile=>{const shifts=expectedShifts.filter(shift=>shift.staff_id===profile.id);let completedShifts=0,missingEntries=0,missingExits=0,hasEntry=false,hasExit=false,hasOccurrence=false,registered=false;for(const shift of shifts){const kinds=attendanceByShift.get(shift.id)||[],incident=kinds.some(kind=>['absence','medical_leave','vacation'].includes(kind)),cin=kinds.includes('clock_in'),cout=kinds.includes('clock_out');if(incident){completedShifts++;hasOccurrence=true;registered=true;}else{hasEntry=hasEntry||cin;hasExit=hasExit||cout;if(cin||cout)registered=true;if(!cin)missingEntries++;if(!cout)missingExits++;if(cin&&cout)completedShifts++;}}return{profile_id:profile.id,display_name:profile.display_name,completed_shifts:completedShifts,total_shifts:shifts.length,missing_entries:missingEntries,missing_exits:missingExits,has_entry:hasEntry,has_exit:hasExit,has_occurrence:hasOccurrence,registered,complete:shifts.length>0&&completedShifts===shifts.length};}).sort((a,b)=>a.display_name.localeCompare(b.display_name,'pt-PT')),attendanceStatus={completed:attendancePeople.filter(person=>person.complete).length,total:attendancePeople.length,people:attendancePeople};
-    const [temperatureQuery,taskQuery,cleaningQuery,orderQuery,deliveryQuery]=await Promise.all([
+    const [temperatureQuery,taskQuery,cleaningQuery,deliveryQuery]=await Promise.all([
       db.from('haccp_records').select('equipment_name,checklist_data').eq('kind','temperature').eq('record_date',date),
       db.from('cleaning_tasks').select('id').eq('active',true).eq('frequency','daily'),
       db.from('cleaning_records').select('task_id,completed_at').gte('completed_at',`${shiftIsoDate(date,-1)}T00:00:00Z`).lt('completed_at',`${shiftIsoDate(date,2)}T00:00:00Z`),
-      db.from('suppliers').select('id').eq('active',true).eq('order_weekday',weekday),
       db.from('suppliers').select('id').eq('active',true).eq('delivery_weekday',weekday),
     ]);
-    if(temperatureQuery.error||taskQuery.error||cleaningQuery.error||orderQuery.error||deliveryQuery.error)return fail('Não foi possível calcular todas as tarefas diárias.',500);
-    const temperatureSlots=new Set((temperatureQuery.data||[]).map(row=>`${row.equipment_name}|${row.checklist_data?.period||''}`)),temperatureDone=Math.min(8,temperatureSlots.size);
+    if(temperatureQuery.error||taskQuery.error||cleaningQuery.error||deliveryQuery.error)return fail('Não foi possível calcular todas as tarefas diárias.',500);
+    const canonicalTempEquipment=(value:string)=>({'Frigo 1 — Bar':'Frigorífico bar 2','Frigo 2 — Cozinha':'Frigorífico cozinha 3','Arca 1 — Congelador do armazém':'Congelador armazém 4','Arca 2 — Congelador do gelo':'Congelador gelo 1'} as Record<string,string>)[String(value||'').trim()]||String(value||'').trim();
+    const temperatureSlots=new Set((temperatureQuery.data||[]).map(row=>`${canonicalTempEquipment(row.equipment_name)}|${row.checklist_data?.period||''}`)),temperatureDone=Math.min(10,temperatureSlots.size);
     const dailyTaskIds=new Set((taskQuery.data||[]).map(row=>row.id)),cleanedTaskIds=new Set((cleaningQuery.data||[]).filter(row=>dateInTimezone(row.completed_at)==date&&dailyTaskIds.has(row.task_id)).map(row=>row.task_id)),cleaningDone=Math.min(dailyTaskIds.size,cleanedTaskIds.size);
-    const orderIds=(orderQuery.data||[]).map(x=>x.id),deliveryIds=(deliveryQuery.data||[]).map(x=>x.id);
-    const [{data:orderChecks,error:orderChecksError},{data:deliveryChecks,error:deliveryChecksError}]=await Promise.all([
-      orderIds.length?db.from('supplier_order_checks').select('supplier_id').eq('order_date',date).in('supplier_id',orderIds):Promise.resolve({data:[],error:null}),
-      deliveryIds.length?db.from('supplier_delivery_checks').select('supplier_id,status,checked_at').eq('delivery_date',date).in('supplier_id',deliveryIds).order('checked_at',{ascending:false}):Promise.resolve({data:[],error:null}),
-    ]);
-    if(orderChecksError||deliveryChecksError)return fail('Não foi possível calcular as encomendas e entregas.',500);
-    const ordered=new Set((orderChecks||[]).map(x=>x.supplier_id)),latestDelivery=new Map<string,string>();for(const row of deliveryChecks||[])if(!latestDelivery.has(row.supplier_id))latestDelivery.set(row.supplier_id,row.status);
+    const deliveryIds=(deliveryQuery.data||[]).map(x=>x.id);
+    const {data:deliveryChecks,error:deliveryChecksError}=deliveryIds.length?await db.from('supplier_delivery_checks').select('supplier_id,status,checked_at').eq('delivery_date',date).in('supplier_id',deliveryIds).order('checked_at',{ascending:false}):{data:[],error:null};
+    if(deliveryChecksError)return fail('Não foi possível calcular as entregas.',500);
+    const latestDelivery=new Map<string,string>();for(const row of deliveryChecks||[])if(!latestDelivery.has(row.supplier_id))latestDelivery.set(row.supplier_id,row.status);
     const groups=[
       {label:'Assiduidade · turnos com registo',done:attendanceStats.punches,total:expectedShifts.length*2,displayDone:attendanceStats.registeredShifts,displayTotal:expectedShifts.length},
-      {label:'Temperaturas',done:temperatureDone,total:8},
+      {label:'Temperaturas',done:temperatureDone,total:10},
       {label:'Higienização',done:cleaningDone,total:dailyTaskIds.size},
-      {label:'Encomendas',done:orderIds.filter(id=>ordered.has(id)).length,total:orderIds.length},
       {label:'Entregas',done:deliveryIds.filter(id=>latestDelivery.get(id)==='received_ok').length,total:deliveryIds.length},
     ];
     return reply({date,groups,attendanceStatus,done:groups.reduce((sum,x)=>sum+x.done,0),total:groups.reduce((sum,x)=>sum+x.total,0)});
