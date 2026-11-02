@@ -159,7 +159,7 @@ Deno.serve(async (req: Request) => {
     if (employmentError || insuranceError) return fail('Não foi possível carregar os dados do perfil.',500);
     return reply({employmentStartDate:employment?.start_date||null,insurance:insurance?{providerName:insurance.provider_name,policyNumber:insurance.policy_number}:null});
   }
-  const staffActions=new Set(['stock:list','stock:minimum','stock:rename','stock:price','inventory:monthly:get','inventory:monthly:start','inventory:monthly:save','pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','dashboard:daily-progress']);
+  const staffActions=new Set(['stock:list','stock:quantity','stock:minimum','stock:rename','stock:price','stock:create','inventory:monthly:get','inventory:monthly:start','inventory:monthly:save','pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','dashboard:daily-progress']);
   if(actor.role==='staff'&&!staffActions.has(action))return fail('Este módulo está disponível apenas à Gerência.',403);
   if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list','schedule:save','schedule:publish'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
   if(actor.role==='staff'&&!actor.attendance_access&&action.startsWith('attendance:'))return fail('Este perfil não tem acesso ao registo de assiduidade.',403);
@@ -367,6 +367,16 @@ Deno.serve(async (req: Request) => {
     return error?fail('Não foi possível guardar a encomenda diária.',400):reply({ok:true});
   }
 
+  if(action==='stock:create'){
+    const item=body.item&&typeof body.item==='object'?body.item as Record<string,unknown>:{},name=String(item.name||'').trim(),category=String(item.category||'Outros').trim(),unit=String(item.unit||'un.').trim(),quantity=Number(item.quantity),minimum=Number(item.minimum_quantity),rawCost=item.unit_cost_ex_vat,canEditPrice=canManage(actor)||actor.id===RAFAEL_PROFILE_ID;
+    if(!name||name.length>120||!category||category.length>80||!unit||unit.length>40||!Number.isFinite(quantity)||quantity<0||!Number.isFinite(minimum)||minimum<0)return fail('Confirma nome, categoria, unidade, stock e mínimo.');
+    let unitCost:number|null=null;
+    if(rawCost!==undefined&&rawCost!==null){const parsed=Number(rawCost);if(!canEditPrice)return fail('Só a Gerência e o Rafael podem definir preços.',403);if(!Number.isFinite(parsed)||parsed<0)return fail('Preço inválido.');unitCost=parsed;}
+    const record={name,category,unit,quantity,minimum_quantity:minimum,supplier_name:null,unit_cost_ex_vat:unitCost,updated_by:actor.id,updated_at:new Date().toISOString(),active:true};
+    const {data,error}=await db.from('stock_items').insert(record).select('id').single();
+    return error?fail('Não foi possível adicionar o artigo.',400):reply({id:data.id});
+  }
+
   if (action === 'stock:minimum') {
     if (actor.role!=='staff'&&!canManage(actor)) return fail('Sem permissão para alterar a quantidade mínima.', 403);
     const itemId=String(body.itemId||''),minimum=Number(body.minimum);
@@ -440,6 +450,10 @@ Deno.serve(async (req: Request) => {
         }
       }
       const snapshot=Array.isArray(count.items)?count.items as Array<Record<string,unknown>>:[];
+      const {data:currentStock,error:currentStockError}=await db.from('stock_items').select('id,name,category,unit,unit_cost_ex_vat').eq('active',true);
+      if(currentStockError)return fail('Não foi possível sincronizar os artigos novos com a folha mensal.',500);
+      const snapshotIds=new Set(snapshot.map(x=>String(x.stock_item_id)));
+      for(const product of currentStock||[])if(!snapshotIds.has(String(product.id)))snapshot.push({stock_item_id:product.id,name:product.name,category:product.category||'Outros',unit:product.unit,counted_quantity:null,unit_cost_ex_vat:canEditPrices&&product.unit_cost_ex_vat!=null?Number(product.unit_cost_ex_vat):null});
       const items=snapshot.map(x=>({...x,counted_quantity:values.has(String(x.stock_item_id))?values.get(String(x.stock_item_id)):x.counted_quantity??null,unit_cost_ex_vat:prices.has(String(x.stock_item_id))?prices.get(String(x.stock_item_id)):x.unit_cost_ex_vat??null}));
       for(const [id,cost] of prices){
         const {error}=await db.from('stock_items').update({unit_cost_ex_vat:cost,updated_by:actor.id,updated_at:new Date().toISOString()}).eq('id',id).eq('active',true);
