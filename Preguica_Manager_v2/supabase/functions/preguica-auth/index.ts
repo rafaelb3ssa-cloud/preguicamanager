@@ -410,7 +410,7 @@ Deno.serve(async (req: Request) => {
     const canEditPrices=canManage(actor)||actor.id===RAFAEL_PROFILE_ID;
     const safeCount=(count)=>!count||canEditPrices?count:{...count,items:(Array.isArray(count.items)?count.items:[]).map(({unit_cost_ex_vat,...item})=>item)};
     const month=String(body.month||'');
-    if(!/^\\d{4}-(0[1-9]|1[0-2])$/.test(month))return fail('Seleciona um mês válido.');
+    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return fail('Seleciona um mês válido.');
     const inventoryMonth=`${month}-01`;
     if(action==='inventory:monthly:get'){
       const [{data,error},{data:previous,error:previousError}]=await Promise.all([
