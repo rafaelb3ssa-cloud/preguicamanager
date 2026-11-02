@@ -280,10 +280,14 @@ Deno.serve(async (req: Request) => {
       .select('supplier_key,lines,updated_by,updated_at')
       .order('supplier_key');
     if (error) return fail('Não foi possível carregar as encomendas guardadas.', 500);
-    const { data: history, error: historyError } = await db.from('supplier_order_sheet_history')
-      .select('id,changed_by,supplier_keys,line_count,saved_at')
-      .order('saved_at', { ascending: false }).limit(100);
-    if (historyError) return fail('Não foi possível carregar o histórico das encomendas.', 500);
+    let history: Array<{id:string;changed_by:string;supplier_keys:string[];line_count:number;saved_at:string}> = [];
+    try {
+      history = await pagedRows<{id:string;changed_by:string;supplier_keys:string[];line_count:number;saved_at:string}>((from,to)=>db.from('supplier_order_sheet_history')
+        .select('id,changed_by,supplier_keys,line_count,saved_at')
+        .order('saved_at', { ascending: false }).order('id', { ascending: false }).range(from,to));
+    } catch {
+      return fail('Não foi possível carregar o histórico das encomendas.', 500);
+    }
     const ids = [...new Set((history || []).map((row) => row.changed_by))];
     const { data: profiles, error: profilesError } = ids.length
       ? await db.from('profiles').select('id,display_name').in('id', ids)
