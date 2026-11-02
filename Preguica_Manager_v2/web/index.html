@@ -125,6 +125,26 @@ button,select,input[type="date"],input[type="month"]{min-height:44px}input,selec
  .schedule-sheet .schedule-cell{min-width:148px;min-height:82px;font-size:16px}
 }
 .op-autocomplete-menu{position:fixed;z-index:10000;overflow-y:auto;overscroll-behavior:contain;border:1px solid #685638;border-radius:14px;background:#171613;box-shadow:0 16px 42px #000c;padding:6px;color:#f4f0e7;-webkit-overflow-scrolling:touch}.op-autocomplete-menu[hidden]{display:none}.op-autocomplete-heading{position:sticky;top:-6px;z-index:1;padding:9px 10px;background:#211e18;color:#d9bd7b;font-size:11px;font-weight:750;letter-spacing:.7px;text-transform:uppercase;border-bottom:1px solid #39352c}.op-autocomplete-option{display:block;width:100%;min-height:44px;padding:10px 12px;border:0;border-radius:8px;background:transparent;text-align:left;color:#f4f0e7;font-size:15px}.op-autocomplete-option:hover,.op-autocomplete-option:focus{background:#30291b;color:#f0d69d;outline:none}.op-autocomplete-empty{padding:15px 12px;color:#c0b8a9;font-size:13px}@media(max-width:640px){.op-autocomplete-menu{max-height:38vh!important}.op-autocomplete-option{min-height:48px;font-size:16px;padding:12px}}
+
+/* Navegação inferior e conteúdo largo em dispositivos táteis e em paisagem. */
+@media (pointer:coarse) and (max-width:1400px), (orientation:landscape) and (max-height:600px){
+  body{padding-bottom:calc(88px + env(safe-area-inset-bottom));overflow-x:hidden}
+  .app{grid-template-columns:minmax(0,1fr);min-height:100dvh}
+  .sidebar{position:fixed;inset:auto 0 0;z-index:30;width:100%;padding:5px 0 calc(5px + env(safe-area-inset-bottom));background:#141414f5;border:0;border-top:1px solid #51452d;box-shadow:0 -8px 28px #0009;backdrop-filter:blur(14px)}
+  .brand,.subbrand,.sidefoot{display:none}
+  .nav{display:flex;gap:3px;margin:0;padding:0 6px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .nav::-webkit-scrollbar{display:none}
+  .nav button{display:flex;flex:1 0 72px;max-width:140px;min-width:70px;min-height:64px;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:5px 3px;border:1px solid transparent;border-radius:10px;font-size:10px;line-height:1.08;text-align:center;white-space:normal;touch-action:manipulation}
+  .nav button .nav-icon{width:23px;height:23px;flex:none}
+  .nav button span{display:block;max-width:92px;overflow:hidden;text-overflow:ellipsis}
+  .main{width:100%;max-width:none;min-width:0;padding:16px 18px calc(94px + env(safe-area-inset-bottom))}
+}
+@media (orientation:landscape) and (min-width:700px) and (max-height:600px){
+  .two{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .three{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .formgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
 </style></head>
 <body>
 <div class="authgate" id="authGate"><div class="authbox"><img class="login-logo" src="assets/cafe-preguica-logo.jpg" alt="Café Preguiça"><div class="eyebrow">Café Preguiça · acesso seguro</div><h1>Quem está a usar?</h1><p class="login-welcome">Bem-vindo/a! Se estás aqui, fazes parte da nossa equipa. Este é o portal privado do Preguiça Café, com acesso único às informações e ferramentas de que precisas no teu dia a dia.</p><div class="muted">Escolhe Gerência ou o teu nome e introduz o PIN para continuar.</div><div class="authusers" id="authUsers"></div><form id="pinLoginForm" class="hidden" autocomplete="on"><input class="autofill-username" id="loginUsername" name="username" type="text" autocomplete="username" tabindex="-1" aria-hidden="true"><label for="loginPin">PIN</label><input class="authinput" id="loginPin" name="password" type="password" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" autocomplete="current-password" required><label class="pin-memory-check"><input id="rememberPin" type="checkbox"> Memorizar PIN neste dispositivo</label><p class="footnote pin-memory-note">O telemóvel pode pedir confirmação para guardar o PIN no gestor de palavras-passe. O portal não guarda o PIN.</p><p><button class="primary" type="submit">Entrar</button> <button type="button" id="backToUsers">Voltar</button></p></form><div class="autherror" id="authError" role="status"></div><p class="confidentiality-note">Tudo o que está neste portal é confidencial e destina-se exclusivamente às colaboradoras e aos colaboradores do Café Preguiça.</p><p class="footnote">A sessão termina automaticamente após 12 horas.</p></div></div>
