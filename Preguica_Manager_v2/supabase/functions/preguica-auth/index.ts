@@ -407,6 +407,7 @@ Deno.serve(async (req: Request) => {
   }
 
   if (action.startsWith('inventory:monthly:')) {
+    if(!canManage(actor)&&actor.id!==RAFAEL_PROFILE_ID)return fail('O inventário mensal está disponível apenas à Gerência e ao Rafael Bessa.',403);
     const canEditPrices=canManage(actor)||actor.id===RAFAEL_PROFILE_ID;
     const safeCount=(count)=>!count||canEditPrices?count:{...count,items:(Array.isArray(count.items)?count.items:[]).map(({unit_cost_ex_vat,...item})=>item)};
     const month=String(body.month||'');
