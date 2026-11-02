@@ -159,7 +159,7 @@ Deno.serve(async (req: Request) => {
     if (employmentError || insuranceError) return fail('Não foi possível carregar os dados do perfil.',500);
     return reply({employmentStartDate:employment?.start_date||null,insurance:insurance?{providerName:insurance.provider_name,policyNumber:insurance.policy_number}:null});
   }
-  const staffActions=new Set(['stock:list','stock:quantity','stock:minimum','stock:rename','stock:price','stock:create','inventory:monthly:get','inventory:monthly:start','inventory:monthly:save','pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','dashboard:daily-progress']);
+  const staffActions=new Set(['stock:list','stock:quantity','stock:minimum','stock:rename','stock:price','stock:create','inventory:monthly:get','inventory:monthly:start','inventory:monthly:save','pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','operations:daily:get','operations:daily:check','dashboard:daily-progress']);
   if(actor.role==='staff'&&!staffActions.has(action)&&!action.startsWith('invoice:'))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   const invoiceActions=new Set(['invoice:list','invoice:upload-start','invoice:upload-finish','invoice:download','invoice:delete','invoice:bundle-links']);
@@ -233,10 +233,28 @@ Deno.serve(async (req: Request) => {
   if(actor.role==='staff'&&!actor.schedule_access&&['schedule:list','closures:list','schedule:save','schedule:publish'].includes(action))return fail('Este perfil não tem acesso a horários nem ao mapa de férias.',403);
   if(actor.role==='staff'&&!actor.attendance_access&&action.startsWith('attendance:'))return fail('Este perfil não tem acesso ao registo de assiduidade.',403);
 
+  const dailyOperationTasks=new Set(['bar_fridge_restock','preguicinhas_mise_en_place','second_floor_clean']);
+  if(action==='operations:daily:get'){
+    const date=lisbonToday();
+    if(new Date(`${date}T12:00:00Z`).getUTCDay()===0)return reply({date,closed:true,checks:[]});
+    const {data,error}=await db.from('daily_operation_checks').select('task_key,checked_by,checked_at').eq('check_date',date);
+    if(error)return fail('Não foi possível carregar as verificações de operação.',500);
+    const ids=[...new Set((data||[]).map(row=>row.checked_by))],{data:profiles,error:profilesError}=ids.length?await db.from('profiles').select('id,display_name').in('id',ids):{data:[],error:null};
+    if(profilesError)return fail('Não foi possível identificar quem fez as verificações.',500);
+    const names=new Map((profiles||[]).map(profile=>[profile.id,profile.display_name]));
+    return reply({date,checks:(data||[]).map(row=>({task_key:row.task_key,checked_at:row.checked_at,checked_by_name:names.get(row.checked_by)||'Equipa'}))});
+  }
+  if(action==='operations:daily:check'){
+    const taskKey=String(body.taskKey||''),date=lisbonToday();
+    if(!dailyOperationTasks.has(taskKey))return fail('Verificação de operação desconhecida.');
+    if(new Date(`${date}T12:00:00Z`).getUTCDay()===0)return fail('O estabelecimento está encerrado ao domingo.');
+    const {error}=await db.from('daily_operation_checks').upsert({check_date:date,task_key:taskKey,checked_by:actor.id},{onConflict:'check_date,task_key',ignoreDuplicates:true});
+    return error?fail('Não foi possível guardar a verificação.',500):reply({ok:true,date});
+  }
   if(action==='dashboard:daily-progress'){
     if(!canManage(actor)&&actor.id!==RAFAEL_PROFILE_ID)return fail('Este resumo está disponível apenas à Gerência e ao Rafael Bessa.',403);
     const date=lisbonToday(),week=mondayOf(date),weekday=((new Date(`${date}T12:00:00Z`).getUTCDay()+6)%7)+1;
-    if(weekday===7){const groups=[{label:'Assiduidade · turnos com registo',done:0,total:0,displayDone:0,displayTotal:0},{label:'Temperaturas',done:0,total:0},{label:'Higienização',done:0,total:0},{label:'Entregas',done:0,total:0}];return reply({date,closed:true,groups,attendanceStatus:{completed:0,total:0,people:[]},done:0,total:0});}
+    if(weekday===7){const groups=[{label:'Assiduidade · turnos com registo',done:0,total:0,displayDone:0,displayTotal:0},{label:'Temperaturas',done:0,total:0},{label:'Higienização',done:0,total:0},{label:'Operação',done:0,total:0},{label:'Entregas',done:0,total:0}];return reply({date,closed:true,groups,attendanceStatus:{completed:0,total:0,people:[]},done:0,total:0});}
     const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('week_start',week).eq('status','published').order('version',{ascending:false}).limit(1).maybeSingle();
     if(scheduleError)return fail('Não foi possível carregar o horário publicado.',500);
     let expectedShifts:any[]=[];
@@ -249,16 +267,18 @@ Deno.serve(async (req: Request) => {
     const todayStaffIds=[...new Set(expectedShifts.map(shift=>shift.staff_id))],{data:todayStaff,error:todayStaffError}=todayStaffIds.length?await db.from('profiles').select('id,display_name').in('id',todayStaffIds).eq('active',true).eq('role','staff').neq('id',RAFAEL_PROFILE_ID):{data:[],error:null};
     if(todayStaffError)return fail('Não foi possível associar os registos às colaboradoras.',500);
     const attendancePeople=(todayStaff||[]).map(profile=>{const shifts=expectedShifts.filter(shift=>shift.staff_id===profile.id);let completedShifts=0,missingEntries=0,missingExits=0,hasEntry=false,hasExit=false,hasOccurrence=false,registered=false;for(const shift of shifts){const kinds=attendanceByShift.get(shift.id)||[],incident=kinds.some(kind=>['absence','medical_leave','vacation'].includes(kind)),cin=kinds.includes('clock_in'),cout=kinds.includes('clock_out');if(incident){completedShifts++;hasOccurrence=true;registered=true;}else{hasEntry=hasEntry||cin;hasExit=hasExit||cout;if(cin||cout)registered=true;if(!cin)missingEntries++;if(!cout)missingExits++;if(cin&&cout)completedShifts++;}}return{profile_id:profile.id,display_name:profile.display_name,completed_shifts:completedShifts,total_shifts:shifts.length,missing_entries:missingEntries,missing_exits:missingExits,has_entry:hasEntry,has_exit:hasExit,has_occurrence:hasOccurrence,registered,complete:shifts.length>0&&completedShifts===shifts.length};}).sort((a,b)=>a.display_name.localeCompare(b.display_name,'pt-PT')),attendanceStatus={completed:attendancePeople.filter(person=>person.complete).length,total:attendancePeople.length,people:attendancePeople};
-    const [temperatureQuery,taskQuery,cleaningQuery,deliveryQuery]=await Promise.all([
+    const [temperatureQuery,taskQuery,cleaningQuery,deliveryQuery,operationQuery]=await Promise.all([
       db.from('haccp_records').select('equipment_name,checklist_data').eq('kind','temperature').eq('record_date',date),
       db.from('cleaning_tasks').select('id').eq('active',true).eq('frequency','daily'),
       db.from('cleaning_records').select('task_id,completed_at').gte('completed_at',`${shiftIsoDate(date,-1)}T00:00:00Z`).lt('completed_at',`${shiftIsoDate(date,2)}T00:00:00Z`),
       db.from('suppliers').select('id').eq('active',true).eq('delivery_weekday',weekday),
+      db.from('daily_operation_checks').select('task_key').eq('check_date',date),
     ]);
-    if(temperatureQuery.error||taskQuery.error||cleaningQuery.error||deliveryQuery.error)return fail('Não foi possível calcular todas as tarefas diárias.',500);
+    if(temperatureQuery.error||taskQuery.error||cleaningQuery.error||deliveryQuery.error||operationQuery.error)return fail('Não foi possível calcular todas as tarefas diárias.',500);
     const canonicalTempEquipment=(value:string)=>({'Frigo 1 — Bar':'Frigorífico bar 2','Frigo 2 — Cozinha':'Frigorífico cozinha 3','Arca 1 — Congelador do armazém':'Congelador armazém 4','Arca 2 — Congelador do gelo':'Congelador gelo 1'} as Record<string,string>)[String(value||'').trim()]||String(value||'').trim();
     const temperatureSlots=new Set((temperatureQuery.data||[]).map(row=>`${canonicalTempEquipment(row.equipment_name)}|${row.checklist_data?.period||''}`)),temperatureDone=Math.min(10,temperatureSlots.size);
     const dailyTaskIds=new Set((taskQuery.data||[]).map(row=>row.id)),cleanedTaskIds=new Set((cleaningQuery.data||[]).filter(row=>dateInTimezone(row.completed_at)==date&&dailyTaskIds.has(row.task_id)).map(row=>row.task_id)),cleaningDone=Math.min(dailyTaskIds.size,cleanedTaskIds.size);
+    const operationDone=new Set((operationQuery.data||[]).map(x=>x.task_key)).size;
     const deliveryIds=(deliveryQuery.data||[]).map(x=>x.id);
     const {data:deliveryChecks,error:deliveryChecksError}=deliveryIds.length?await db.from('supplier_delivery_checks').select('supplier_id,status,checked_at').eq('delivery_date',date).in('supplier_id',deliveryIds).order('checked_at',{ascending:false}):{data:[],error:null};
     if(deliveryChecksError)return fail('Não foi possível calcular as entregas.',500);
@@ -267,6 +287,7 @@ Deno.serve(async (req: Request) => {
       {label:'Assiduidade · turnos com registo',done:attendanceStats.punches,total:expectedShifts.length*2,displayDone:attendanceStats.registeredShifts,displayTotal:expectedShifts.length},
       {label:'Temperaturas',done:temperatureDone,total:10},
       {label:'Higienização',done:cleaningDone,total:dailyTaskIds.size},
+      {label:'Operação',done:operationDone,total:3},
       {label:'Entregas',done:deliveryIds.filter(id=>latestDelivery.get(id)==='received_ok').length,total:deliveryIds.length},
     ];
     return reply({date,groups,attendanceStatus,done:groups.reduce((sum,x)=>sum+x.done,0),total:groups.reduce((sum,x)=>sum+x.total,0)});
