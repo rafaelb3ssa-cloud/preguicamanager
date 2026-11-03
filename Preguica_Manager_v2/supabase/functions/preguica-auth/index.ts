@@ -146,6 +146,78 @@ Deno.serve(async (req: Request) => {
   const actor = await currentProfile(req);
   if (!actor) return fail('Sessão expirada. Entra novamente.', 401);
   if (action === 'session') return reply({ profile: actor });
+  const canAccessFixedExpenses = (profile: Profile) => canManage(profile) || profile.id === RAFAEL_PROFILE_ID;
+  if (action === 'fixed-expenses:list' || action === 'fixed-expenses:save') {
+    if (!canAccessFixedExpenses(actor)) return fail('As despesas fixas estão disponíveis apenas à Gerência e ao Rafael Bessa.', 403);
+    if (action === 'fixed-expenses:list') {
+      const { data, error } = await db.from('fixed_expenses').select('id,name,frequency,amount,sort_order,updated_at').order('sort_order').order('name');
+      return error ? fail('Não foi possível carregar as despesas fixas.', 500) : reply({ items: data || [] });
+    }
+    const rawItems = Array.isArray(body.items) ? body.items : null;
+    if (!rawItems || rawItems.length > 200) return fail('A lista de despesas não é válida.');
+    const items: Array<Record<string, unknown>> = [];
+    for (let index = 0; index < rawItems.length; index++) {
+      const raw = rawItems[index];
+      if (!raw || typeof raw !== 'object') return fail('Existe uma linha de despesa inválida.');
+      const item = raw as Record<string, unknown>;
+      const name = String(item.name || '').trim();
+      const frequency = String(item.frequency || '');
+      const amount = item.amount === null || item.amount === '' || item.amount === undefined ? null : Number(item.amount);
+      if (!name || name.length > 120 || !['monthly', 'annual'].includes(frequency) || (amount !== null && (!Number.isFinite(amount) || amount < 0 || amount > 9999999999.99))) return fail('Confirma o nome, a periodicidade e um valor válido em cada linha.');
+      const row: Record<string, unknown> = { name, frequency, amount, sort_order: index, updated_by: actor.id, updated_at: new Date().toISOString() };
+      if (typeof item.id === 'string' && /^[0-9a-f-]{36}$/i.test(item.id)) row.id = item.id;
+      else row.created_by = actor.id;
+      items.push(row);
+    }
+    const { data: existing, error: existingError } = await db.from('fixed_expenses').select('id');
+    if (existingError) return fail('Não foi possível guardar as despesas fixas.', 500);
+    const { error: upsertError } = items.length ? await db.from('fixed_expenses').upsert(items, { onConflict: 'id' }) : { error: null };
+    if (upsertError) return fail('Não foi possível guardar as despesas fixas.', 500);
+    const keep = new Set(items.map(item => String(item.id || '')));
+    const removeIds = (existing || []).map(item => item.id).filter(id => !keep.has(id));
+    if (removeIds.length) {
+      const { error: deleteError } = await db.from('fixed_expenses').delete().in('id', removeIds);
+      if (deleteError) return fail('As alterações foram guardadas, mas não foi possível remover todas as linhas apagadas.', 500);
+    }
+    const { data, error } = await db.from('fixed_expenses').select('id,name,frequency,amount,sort_order,updated_at').order('sort_order').order('name');
+    return error ? fail('As despesas foram guardadas, mas não foi possível confirmar a lista.', 500) : reply({ items: data || [] });
+  }
+  const canAccessFixedExpenses = (profile: Profile) => canManage(profile) || profile.id === RAFAEL_PROFILE_ID;
+  if (action === 'fixed-expenses:list' || action === 'fixed-expenses:save') {
+    if (!canAccessFixedExpenses(actor)) return fail('As despesas fixas estão disponíveis apenas à Gerência e ao Rafael Bessa.', 403);
+    if (action === 'fixed-expenses:list') {
+      const { data, error } = await db.from('fixed_expenses').select('id,name,frequency,amount,sort_order,updated_at').order('sort_order').order('name');
+      return error ? fail('Não foi possível carregar as despesas fixas.', 500) : reply({ items: data || [] });
+    }
+    const rawItems = Array.isArray(body.items) ? body.items : null;
+    if (!rawItems || rawItems.length > 200) return fail('A lista de despesas não é válida.');
+    const items: Array<Record<string, unknown>> = [];
+    for (let index = 0; index < rawItems.length; index++) {
+      const raw = rawItems[index];
+      if (!raw || typeof raw !== 'object') return fail('Existe uma linha de despesa inválida.');
+      const item = raw as Record<string, unknown>;
+      const name = String(item.name || '').trim();
+      const frequency = String(item.frequency || '');
+      const amount = item.amount === null || item.amount === '' || item.amount === undefined ? null : Number(item.amount);
+      if (!name || name.length > 120 || !['monthly', 'annual'].includes(frequency) || (amount !== null && (!Number.isFinite(amount) || amount < 0 || amount > 9999999999.99))) return fail('Confirma o nome, a periodicidade e um valor válido em cada linha.');
+      const row: Record<string, unknown> = { name, frequency, amount, sort_order: index, updated_by: actor.id, updated_at: new Date().toISOString() };
+      if (typeof item.id === 'string' && /^[0-9a-f-]{36}$/i.test(item.id)) row.id = item.id;
+      else row.created_by = actor.id;
+      items.push(row);
+    }
+    const { data: existing, error: existingError } = await db.from('fixed_expenses').select('id');
+    if (existingError) return fail('Não foi possível guardar as despesas fixas.', 500);
+    const { error: upsertError } = items.length ? await db.from('fixed_expenses').upsert(items, { onConflict: 'id' }) : { error: null };
+    if (upsertError) return fail('Não foi possível guardar as despesas fixas.', 500);
+    const keep = new Set(items.map(item => String(item.id || '')));
+    const removeIds = (existing || []).map(item => item.id).filter(id => !keep.has(id));
+    if (removeIds.length) {
+      const { error: deleteError } = await db.from('fixed_expenses').delete().in('id', removeIds);
+      if (deleteError) return fail('As alterações foram guardadas, mas não foi possível remover todas as linhas apagadas.', 500);
+    }
+    const { data, error } = await db.from('fixed_expenses').select('id,name,frequency,amount,sort_order,updated_at').order('sort_order').order('name');
+    return error ? fail('As despesas foram guardadas, mas não foi possível confirmar a lista.', 500) : reply({ items: data || [] });
+  }
   if (action === 'pin:change') {
     const currentPin=String(body.currentPin||''),newPin=String(body.newPin||'');
     if(!/^[0-9]{4,8}$/.test(currentPin)||!/^[0-9]{4,8}$/.test(newPin))return fail('O PIN atual e o novo PIN devem ter entre 4 e 8 algarismos.');
@@ -163,7 +235,8 @@ Deno.serve(async (req: Request) => {
     if (employmentError || insuranceError) return fail('Não foi possível carregar os dados do perfil.',500);
     return reply({employmentStartDate:employment?.start_date||null,insurance:insurance?{providerName:insurance.provider_name,policyNumber:insurance.policy_number}:null});
   }
-  const staffActions=new Set(['stock:list','stock:quantity','stock:minimum','stock:rename','stock:price','stock:create','inventory:monthly:get','inventory:monthly:start','inventory:monthly:save','pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','operations:daily:get','operations:daily:check','dashboard:attendance-status','dashboard:daily-progress']);
+  const staffActions=new Set(['stock:list','stock:quantity','stock:minimum','stock:rename','stock:price','stock:create','inventory:monthly:get','inventory:monthly:start','inventory:monthly:save','pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','attendance:note','attendance:review','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','operations:daily:get','operations:daily:check','dashboard:daily-progress','fixed-expenses:list','fixed-expenses:save']);
+  const canManageAttendance=(profile:Profile)=>canManage(profile)||profile.id===RAFAEL_PROFILE_ID;
   if(actor.role==='staff'&&!staffActions.has(action)&&!action.startsWith('invoice:'))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   const invoiceActions=new Set(['invoice:list','invoice:upload-start','invoice:upload-finish','invoice:download','invoice:delete','invoice:bundle-links']);
@@ -254,44 +327,6 @@ Deno.serve(async (req: Request) => {
     if(new Date(`${date}T12:00:00Z`).getUTCDay()===0)return fail('O estabelecimento está encerrado ao domingo.');
     const {error}=await db.from('daily_operation_checks').upsert({check_date:date,task_key:taskKey,checked_by:actor.id},{onConflict:'check_date,task_key',ignoreDuplicates:true});
     return error?fail('Não foi possível guardar a verificação.',500):reply({ok:true,date});
-  }
-  const accountantTaskKeys=new Set(['saft','bank_statements_and_invoices','invoices','vat_map','sold_items','daily_billing_history','email_replies']);
-  if(action==='accountant:monthly:list'){
-    if(!canManage(actor))return fail('A lista da contabilista está disponível apenas à Gerência.',403);
-    const currentMonth=lisbonToday().slice(0,7),firstMonth='2026-11',firstDate=firstMonth+'-01',currentDate=currentMonth+'-01';
-    const {data:checks,error}=await db.from('monthly_accountant_checks').select('month_start,task_key,checked_by,checked_at').gte('month_start',firstDate).lte('month_start',currentDate);
-    if(error)return fail('Não foi possível carregar a lista mensal da contabilista.',500);
-    const rows=checks||[],profileIds=[...new Set(rows.map(row=>row.checked_by))],{data:profiles, error:profileError}=profileIds.length?await db.from('profiles').select('id,display_name').in('id',profileIds):{data:[],error:null};
-    if(profileError)return fail('Não foi possível identificar quem assinalou as tarefas.',500);
-    const names=new Map((profiles||[]).map(profile=>[profile.id,profile.display_name])),byMonth=new Map<string,Record<string,unknown>>();
-    for(const row of rows){const month=String(row.month_start).slice(0,7),items=byMonth.get(month)||{};items[row.task_key]={checked_by_name:names.get(row.checked_by)||'Gerência',checked_at:row.checked_at};byMonth.set(month,items);}
-    const months:any[]=[];for(let cursor=new Date(firstDate+'T00:00:00Z'),end=new Date(currentDate+'T00:00:00Z');cursor<=end;cursor.setUTCMonth(cursor.getUTCMonth()+1)){const month=cursor.toISOString().slice(0,7),checked=byMonth.get(month)||{},completed=accountantTaskKeys.size?Array.from(accountantTaskKeys).filter(key=>!!checked[key]).length:0;months.push({month,checked,completed,total:accountantTaskKeys.size,overdue:month<currentMonth&&completed<accountantTaskKeys.size});}
-    return reply({currentMonth,months});
-  }
-  if(action==='accountant:monthly:check'){
-    if(!canManage(actor))return fail('A lista da contabilista está disponível apenas à Gerência.',403);
-    const month=String(body.month||''),taskKey=String(body.taskKey||''),currentMonth=lisbonToday().slice(0,7);
-    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)||month<'2026-11'||month>currentMonth||!accountantTaskKeys.has(taskKey))return fail('Confirma o mês e a tarefa selecionados.');
-    const monthStart=month+'-01';
-    if(body.checked===false){const {error}=await db.from('monthly_accountant_checks').delete().eq('month_start',monthStart).eq('task_key',taskKey);return error?fail('Não foi possível retirar o visto.',500):reply({ok:true,month,taskKey,checked:false});}
-    const {error}=await db.from('monthly_accountant_checks').upsert({month_start:monthStart,task_key:taskKey,checked_by:actor.id,checked_at:new Date().toISOString()},{onConflict:'month_start,task_key'});
-    return error?fail('Não foi possível guardar o visto.',500):reply({ok:true,month,taskKey,checked:true});
-  }
-  if(action==='dashboard:attendance-status'){
-    if(!canManage(actor)&&actor.id!==RAFAEL_PROFILE_ID)return fail('Este resumo está disponível apenas à Gerência e ao Rafael Bessa.',403);
-    const date=operationalDate(),weekday=((new Date(`${date}T12:00:00Z`).getUTCDay()+6)%7)+1;
-    if(weekday===7)return reply({date,attendanceStatus:{completed:0,total:0,people:[]}});
-    const week=mondayOf(date),{data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('week_start',week).eq('status','published').order('version',{ascending:false}).limit(1).maybeSingle();
-    if(scheduleError)return fail('Não foi possível carregar o horário publicado.',500);
-    const {data:expectedShifts,error:shiftError}=schedule?await db.from('shifts').select('id,staff_id').eq('schedule_id',schedule.id).eq('shift_date',date).neq('staff_id',RAFAEL_PROFILE_ID):{data:[],error:null};
-    if(shiftError)return fail('Não foi possível carregar os turnos de hoje.',500);
-    const shifts=expectedShifts||[],shiftIds=shifts.map(shift=>shift.id),{data:attendanceRows,error:attendanceError}=shiftIds.length?await db.from('attendance_records').select('shift_id,kind,status').in('shift_id',shiftIds):{data:[],error:null};
-    if(attendanceError)return fail('Não foi possível calcular a assiduidade da equipa.',500);
-    const byShift=new Map<string,string[]>();for(const row of attendanceRows||[]){if(['cancelled','rejected'].includes(String(row.status||'')))continue;const kinds=byShift.get(row.shift_id)||[];kinds.push(row.kind);byShift.set(row.shift_id,kinds);}
-    const staffIds=[...new Set(shifts.map(shift=>shift.staff_id))],{data:profiles,error:profilesError}=staffIds.length?await db.from('profiles').select('id,display_name').in('id',staffIds).eq('active',true).eq('role','staff').neq('id',RAFAEL_PROFILE_ID):{data:[],error:null};
-    if(profilesError)return fail('Não foi possível associar os registos às colaboradoras.',500);
-    const people=(profiles||[]).map(profile=>{const personShifts=shifts.filter(shift=>shift.staff_id===profile.id);let completed=0,missingEntries=0,missingExits=0,hasEntry=false,hasExit=false,hasOccurrence=false,registered=false;for(const shift of personShifts){const kinds=byShift.get(shift.id)||[],incident=kinds.some(kind=>['absence','medical_leave','vacation'].includes(kind)),cin=kinds.includes('clock_in'),cout=kinds.includes('clock_out');if(incident){completed++;hasOccurrence=true;registered=true;}else{hasEntry ||=cin;hasExit ||=cout;if(cin||cout)registered=true;if(!cin)missingEntries++;if(!cout)missingExits++;if(cin&&cout)completed++;}}return{profile_id:profile.id,display_name:profile.display_name,completed_shifts:completed,total_shifts:personShifts.length,missing_entries:missingEntries,missing_exits:missingExits,has_entry:hasEntry,has_exit:hasExit,has_occurrence:hasOccurrence,registered,complete:personShifts.length>0&&completed===personShifts.length};}).sort((a,b)=>a.display_name.localeCompare(b.display_name,'pt-PT'));
-    return reply({date,attendanceStatus:{completed:people.filter(person=>person.complete).length,total:people.length,people}});
   }
   if(action==='dashboard:daily-progress'){
     if(!canManage(actor)&&actor.id!==RAFAEL_PROFILE_ID)return fail('Este resumo está disponível apenas à Gerência e ao Rafael Bessa.',403);
@@ -635,14 +670,12 @@ Deno.serve(async (req: Request) => {
     });
   }
   if (action === 'supplier-orders:mark') {
-    const supplierId=String(body.supplierId||''),supplierName=String(body.supplierName||'').trim(),date=String(body.date||dateInTimezone(new Date().toISOString()));
-    if((!/^[0-9a-f-]{36}$/i.test(supplierId)&&(!supplierName||supplierName.length>120))||!validDate(date)||date!==dateInTimezone(new Date().toISOString()))return fail('Confirma o fornecedor e a data de hoje.');
+    const supplierId=String(body.supplierId||''),date=String(body.date||dateInTimezone(new Date().toISOString()));
+    if(!/^[0-9a-f-]{36}$/i.test(supplierId)||!validDate(date)||date!==dateInTimezone(new Date().toISOString()))return fail('Confirma o fornecedor e a data de hoje.');
     const day=new Date(`${date}T12:00:00Z`),weekday=((day.getUTCDay()+6)%7)+1;
-    let supplierQuery=db.from('suppliers').select('id').eq('active',true).eq('order_weekday',weekday);
-    supplierQuery=/^[0-9a-f-]{36}$/i.test(supplierId)?supplierQuery.eq('id',supplierId):supplierQuery.eq('name',supplierName);
-    const {data:supplier,error:supplierError}=await supplierQuery.maybeSingle();
+    const {data:supplier,error:supplierError}=await db.from('suppliers').select('id').eq('id',supplierId).eq('active',true).eq('order_weekday',weekday).maybeSingle();
     if(supplierError||!supplier)return fail('Este fornecedor não tem encomenda prevista para hoje.',403);
-    const {error}=await db.from('supplier_order_checks').insert({supplier_id:supplier.id,order_date:date,completed_by:actor.id,completed_at:new Date().toISOString()});
+    const {error}=await db.from('supplier_order_checks').insert({supplier_id:supplierId,order_date:date,completed_by:actor.id,completed_at:new Date().toISOString()});
     if(error)return fail(error.code==='23505'?'Esta encomenda já foi carimbada hoje.':'Não foi possível carimbar a encomenda.',error.code==='23505'?409:400);
     return reply({ok:true});
   }
@@ -694,9 +727,9 @@ Deno.serve(async (req: Request) => {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return fail('Indica um mês válido.');
     const [year,mon]=month.split('-').map(Number), start=`${month}-01`, end=new Date(Date.UTC(year,mon,1)).toISOString();
     let q=db.from('attendance_records').select('id,staff_id,shift_id,kind,occurred_at,original_occurred_at,note,status,correction_reason,created_at').gte('occurred_at',`${start}T00:00:00Z`).lt('occurred_at',end).order('occurred_at',{ascending:false});
-    if(actor.role==='staff') q=q.eq('staff_id',actor.id);
+    if(actor.role==='staff'&&actor.id!==RAFAEL_PROFILE_ID) q=q.eq('staff_id',actor.id);
     const {data,error}=await q; if(error)return fail('Não foi possível carregar assiduidade.',500);
-    const {data:profiles}=actor.role==='staff'?await db.from('profiles').select('id,display_name').eq('id',actor.id):await db.from('profiles').select('id,display_name').eq('active',true).eq('role','staff').order('display_name');
+    const {data:profiles}=actor.role==='staff'&&actor.id!==RAFAEL_PROFILE_ID?await db.from('profiles').select('id,display_name').eq('id',actor.id):await db.from('profiles').select('id,display_name').eq('active',true).eq('role','staff').order('display_name');
     const staffProfiles=profiles||[],name=(id:string)=>staffProfiles.find(p=>p.id===id)?.display_name||'—';const linkedIds=[...new Set((data||[]).map(x=>x.shift_id).filter(Boolean))],{data:linkedShifts}=linkedIds.length?await db.from('shifts').select('id,shift_date').in('id',linkedIds):{data:[],error:null};const shiftDate=new Map((linkedShifts||[]).map(x=>[x.id,x.shift_date]));
     return reply({records:(data||[]).map(x=>({...x,display_name:name(x.staff_id),shift_date:shiftDate.get(x.shift_id)||null}))});
   }
@@ -745,12 +778,12 @@ Deno.serve(async (req: Request) => {
     return reply({ok:true});
   }
   if (action === 'attendance:note') {
-    if(!canManage(actor))return fail('Só a Gerência pode editar notas de assiduidade.',403);
+    if(!canManageAttendance(actor))return fail('Só a Gerência ou o Rafael Bessa pode editar notas de assiduidade.',403);
     const id=String(body.id||''),note=String(body.note||'').slice(0,1000);if(!/^[0-9a-f-]{36}$/i.test(id))return fail('Registo inválido.');
     const {data,error}=await db.from('attendance_records').update({correction_reason:note,reviewed_by:actor.id,reviewed_at:new Date().toISOString()}).eq('id',id).eq('status','pending').select('id').maybeSingle();if(error)return fail('Não foi possível guardar a nota.',400);return data?reply({ok:true}):fail('Este registo já não está pendente e não pode ser alterado.',403);
   }
   if (action === 'attendance:review') {
-    if(!canManage(actor))return fail('Só a gerência pode validar registos.',403);
+    if(!canManageAttendance(actor))return fail('Só a Gerência ou o Rafael Bessa pode validar registos.',403);
     const id=String(body.id||''), status=String(body.status||'');
     if(!/^[0-9a-f-]{36}$/i.test(id)||!['validated','rejected','corrected'].includes(status))return fail('Indica uma validação válida.');
     const patch:any={status,reviewed_by:actor.id,reviewed_at:new Date().toISOString()};if(body.reason!==undefined)patch.correction_reason=String(body.reason||'').slice(0,1000);if(body.occurredAt){const corrected=String(body.occurredAt);if(Number.isNaN(Date.parse(corrected))||Date.parse(corrected)>Date.now())return fail('Indica uma hora corrigida válida.');const {data:original,error:readError}=await db.from('attendance_records').select('occurred_at,original_occurred_at').eq('id',id).maybeSingle();if(readError||!original)return fail('Não foi possível carregar o registo original.',400);patch.original_occurred_at=original.original_occurred_at||original.occurred_at;patch.occurred_at=new Date(corrected).toISOString();}if(status==='corrected'&&(!patch.correction_reason||!patch.occurred_at))return fail('A correção exige hora e motivo.');const {data,error}=await db.from('attendance_records').update(patch).eq('id',id).eq('status','pending').select('id').maybeSingle();
@@ -789,7 +822,7 @@ Deno.serve(async (req: Request) => {
     const punchShiftById=new Map((punchShifts||[]).map(x=>[x.id,x])),actualDeltaByDay:Record<string,number>={},opened=new Map<string,string>();for(const punch of punches){if(!punch.shift_id)continue;const key=`${punch.staff_id}|${punch.shift_id}`;if(punch.kind==='clock_in'){opened.set(key,punch.occurred_at);continue;}const began=opened.get(key);if(!began)continue;opened.delete(key);const minutes=(Date.parse(punch.occurred_at)-Date.parse(began))/60000,shift=punchShiftById.get(punch.shift_id);if(minutes<=0||minutes>=1440||!shift)continue;const [sh,sm]=String(shift.starts_at).slice(0,5).split(':').map(Number),[eh,em]=String(shift.ends_at).slice(0,5).split(':').map(Number);let plannedMinutes=eh*60+em-sh*60-sm;if(plannedMinutes<0)plannedMinutes+=1440;plannedMinutes=Math.max(0,plannedMinutes-(shift.break_minutes||0));const day=String(shift.shift_date).slice(0,10),dayKey=`${punch.staff_id}|${day}`;actualDeltaByDay[dayKey]=(actualDeltaByDay[dayKey]||0)+(minutes-plannedMinutes)/60;}
     const accumulated:Record<string,number>={},weeklyWorkedHours:Record<string,number>={};const saved=(item:any)=>item?.accumulated_hours&&typeof item.accumulated_hours==='object'?item.accumulated_hours as Record<string,unknown>:{};
     for(const profile of profiles.data||[]){let worked=hoursBySchedule[schedule?.id||'']?.[profile.id]||0;for(const [key,delta] of Object.entries(actualDeltaByDay)){const [staffId,day]=key.split('|');if(staffId===profile.id&&mondayOf(day)===week)worked+=delta;}weeklyWorkedHours[profile.id]=Math.round(worked*6000)/6000;}
-    for(const profile of profiles.data||[]){const selectedIndex=ordered.findIndex(item=>item.week_start===week),baselineLimit=selectedIndex>=0?selectedIndex-1:ordered.length-1;let baseline=-1;for(let i=baselineLimit;i>=0;i--)if(typeof saved(ordered[i])[profile.id]==='number'){baseline=i;break;}let balance=baseline>=0?Number(saved(ordered[baseline])[profile.id]):0;for(let i=baseline>=0?baseline+1:0;i<ordered.length;i++){const item=ordered[i];let worked=hoursBySchedule[item.id]?.[profile.id]||0;for(const [key,delta] of Object.entries(actualDeltaByDay)){const [staffId,day]=key.split('|');if(staffId===profile.id&&mondayOf(day)===item.week_start)worked+=delta;}balance+=worked-Number(profile.weekly_hours||40);}accumulated[profile.id]=Math.round(balance*100)/100;}
+    for(const profile of profiles.data||[]){let baseline=-1;for(let i=ordered.length-1;i>=0;i--)if(typeof saved(ordered[i])[profile.id]==='number'){baseline=i;break;}let balance=baseline>=0?Number(saved(ordered[baseline])[profile.id]):0;for(let i=baseline>=0?baseline+1:0;i<ordered.length;i++){const item=ordered[i];let worked=hoursBySchedule[item.id]?.[profile.id]||0;for(const [key,delta] of Object.entries(actualDeltaByDay)){const [staffId,day]=key.split('|');if(staffId===profile.id&&mondayOf(day)===item.week_start)worked+=delta;}balance+=worked-Number(profile.weekly_hours||40);}accumulated[profile.id]=Math.round(balance*100)/100;}
     let scheduleAttendance:any[]=[];if(actor.role==='staff'&&(shifts.data||[]).length){const shiftIds=(shifts.data||[]).map(x=>x.id);const {data:attRows,error:attError}=await db.from('attendance_records').select('id,shift_id,kind,occurred_at,note,status,correction_reason').eq('staff_id',actor.id).in('shift_id',shiftIds).order('occurred_at');if(attError)return fail('Não foi possível carregar as confirmações do teu horário.',500);scheduleAttendance=attRows||[];}
     const visibleSchedule=actor.role==='staff'&&schedule?{...schedule,accumulated_hours:{[actor.id]:schedule.accumulated_hours?.[actor.id]}}:schedule;
     return reply({schedule:visibleSchedule||null,profiles:profiles.data||[],shifts:shifts.data||[],accumulated,weeklyWorkedHours,scheduleAttendance});
