@@ -48,6 +48,10 @@ const lisbonWallClockToISO = (value: string) => {
   return new Date(instant).toISOString();
 };
 const shiftIsoDate = (value: string, days: number) => { const d = new Date(`${value}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0,10); };
+const operationalDate = (value: string | Date = new Date()) => {
+  const date = dateInTimezone(value);
+  return timeInTimezone(value) < '03:00' ? shiftIsoDate(date, -1) : date;
+};
 const mondayOf = (value: string) => shiftIsoDate(value, -((new Date(`${value}T12:00:00Z`).getUTCDay() + 6) % 7));
 async function pagedRows<T>(makeQuery: (from: number, to: number) => any): Promise<T[]> {
   const rows: T[] = [];
@@ -235,7 +239,7 @@ Deno.serve(async (req: Request) => {
 
   const dailyOperationTasks=new Set(['bar_fridge_restock','preguicinhas_mise_en_place','second_floor_clean']);
   if(action==='operations:daily:get'){
-    const date=lisbonToday();
+    const date=operationalDate();
     if(new Date(`${date}T12:00:00Z`).getUTCDay()===0)return reply({date,closed:true,checks:[]});
     const {data,error}=await db.from('daily_operation_checks').select('task_key,checked_by,checked_at').eq('check_date',date);
     if(error)return fail('Não foi possível carregar as verificações de operação.',500);
@@ -245,7 +249,7 @@ Deno.serve(async (req: Request) => {
     return reply({date,checks:(data||[]).map(row=>({task_key:row.task_key,checked_at:row.checked_at,checked_by_name:names.get(row.checked_by)||'Equipa'}))});
   }
   if(action==='operations:daily:check'){
-    const taskKey=String(body.taskKey||''),date=lisbonToday();
+    const taskKey=String(body.taskKey||''),date=operationalDate();
     if(!dailyOperationTasks.has(taskKey))return fail('Verificação de operação desconhecida.');
     if(new Date(`${date}T12:00:00Z`).getUTCDay()===0)return fail('O estabelecimento está encerrado ao domingo.');
     const {error}=await db.from('daily_operation_checks').upsert({check_date:date,task_key:taskKey,checked_by:actor.id},{onConflict:'check_date,task_key',ignoreDuplicates:true});
@@ -253,7 +257,9 @@ Deno.serve(async (req: Request) => {
   }
   if(action==='dashboard:daily-progress'){
     if(!canManage(actor)&&actor.id!==RAFAEL_PROFILE_ID)return fail('Este resumo está disponível apenas à Gerência e ao Rafael Bessa.',403);
-    const date=lisbonToday(),week=mondayOf(date),weekday=((new Date(`${date}T12:00:00Z`).getUTCDay()+6)%7)+1;
+    const currentOperationalDate=operationalDate(),requestedDate=String(body.date||currentOperationalDate);
+    if(!validDate(requestedDate)||requestedDate>currentOperationalDate)return fail('Seleciona um dia válido até ao dia operacional atual.');
+    const date=requestedDate,week=mondayOf(date),weekday=((new Date(`${date}T12:00:00Z`).getUTCDay()+6)%7)+1;
     if(weekday===7){const groups=[{label:'Assiduidade · turnos com registo',done:0,total:0,displayDone:0,displayTotal:0},{label:'Temperaturas',done:0,total:0},{label:'Higienização',done:0,total:0},{label:'Operação',done:0,total:0},{label:'Entregas',done:0,total:0}];return reply({date,closed:true,groups,attendanceStatus:{completed:0,total:0,people:[]},done:0,total:0});}
     const {data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('week_start',week).eq('status','published').order('version',{ascending:false}).limit(1).maybeSingle();
     if(scheduleError)return fail('Não foi possível carregar o horário publicado.',500);
@@ -277,7 +283,7 @@ Deno.serve(async (req: Request) => {
     if(temperatureQuery.error||taskQuery.error||cleaningQuery.error||deliveryQuery.error||operationQuery.error)return fail('Não foi possível calcular todas as tarefas diárias.',500);
     const canonicalTempEquipment=(value:string)=>({'Frigo 1 — Bar':'Frigorífico bar 2','Frigo 2 — Cozinha':'Frigorífico cozinha 3','Arca 1 — Congelador do armazém':'Congelador armazém 4','Arca 2 — Congelador do gelo':'Congelador gelo 1'} as Record<string,string>)[String(value||'').trim()]||String(value||'').trim();
     const temperatureSlots=new Set((temperatureQuery.data||[]).map(row=>`${canonicalTempEquipment(row.equipment_name)}|${row.checklist_data?.period||''}`)),temperatureDone=Math.min(10,temperatureSlots.size);
-    const dailyTaskIds=new Set((taskQuery.data||[]).map(row=>row.id)),cleanedTaskIds=new Set((cleaningQuery.data||[]).filter(row=>dateInTimezone(row.completed_at)==date&&dailyTaskIds.has(row.task_id)).map(row=>row.task_id)),cleaningDone=Math.min(dailyTaskIds.size,cleanedTaskIds.size);
+    const dailyTaskIds=new Set((taskQuery.data||[]).map(row=>row.id)),cleanedTaskIds=new Set((cleaningQuery.data||[]).filter(row=>operationalDate(row.completed_at)===date&&dailyTaskIds.has(row.task_id)).map(row=>row.task_id)),cleaningDone=Math.min(dailyTaskIds.size,cleanedTaskIds.size);
     const operationDone=new Set((operationQuery.data||[]).map(x=>x.task_key)).size;
     const deliveryIds=(deliveryQuery.data||[]).map(x=>x.id);
     const {data:deliveryChecks,error:deliveryChecksError}=deliveryIds.length?await db.from('supplier_delivery_checks').select('supplier_id,status,checked_at').eq('delivery_date',date).in('supplier_id',deliveryIds).order('checked_at',{ascending:false}):{data:[],error:null};
@@ -911,7 +917,10 @@ Deno.serve(async (req: Request) => {
     if (!validDate(completedDate) || completedDate > new Date().toISOString().slice(0, 10)) return fail('Indica uma data válida para a conclusão.');
     const { data: task, error: taskError } = await db.from('cleaning_tasks').select('id,name,frequency').eq('id', id).eq('active', true).maybeSingle();
     if (taskError || !task) return fail('Tarefa não encontrada.', 404);
-    const completedAt = `${completedDate}T${new Date().toISOString().slice(11, 23)}Z`;
+    const now = new Date();
+    const completedAt = completedDate === operationalDate(now)
+      ? now.toISOString()
+      : lisbonWallClockToISO(`${completedDate}T${timeInTimezone(now)}`);
     const { error } = await db.from('cleaning_records').insert({ task_id: task.id, task_name: task.name, frequency: task.frequency, completed_by: actor.id, completed_at: completedAt, observations: String(body.observations || '').slice(0, 2000), product_used: String(body.product || '').slice(0, 200) });
     return error ? fail('Não foi possível guardar a tarefa.', 400) : reply({ ok: true });
   }
