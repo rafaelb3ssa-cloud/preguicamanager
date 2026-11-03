@@ -271,7 +271,7 @@ Deno.serve(async (req: Request) => {
   if(action==='accountant:monthly:check'){
     if(!canManage(actor))return fail('A lista da contabilista está disponível apenas à Gerência.',403);
     const month=String(body.month||''),taskKey=String(body.taskKey||''),currentMonth=lisbonToday().slice(0,7);
-    if(!/^\\d{4}-(0[1-9]|1[0-2])$/.test(month)||month<'2026-11'||month>currentMonth||!accountantTaskKeys.has(taskKey))return fail('Confirma o mês e a tarefa selecionados.');
+    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)||month<'2026-11'||month>currentMonth||!accountantTaskKeys.has(taskKey))return fail('Confirma o mês e a tarefa selecionados.');
     const monthStart=month+'-01';
     if(body.checked===false){const {error}=await db.from('monthly_accountant_checks').delete().eq('month_start',monthStart).eq('task_key',taskKey);return error?fail('Não foi possível retirar o visto.',500):reply({ok:true,month,taskKey,checked:false});}
     const {error}=await db.from('monthly_accountant_checks').upsert({month_start:monthStart,task_key:taskKey,checked_by:actor.id,checked_at:new Date().toISOString()},{onConflict:'month_start,task_key'});
