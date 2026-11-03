@@ -597,12 +597,14 @@ Deno.serve(async (req: Request) => {
     });
   }
   if (action === 'supplier-orders:mark') {
-    const supplierId=String(body.supplierId||''),date=String(body.date||dateInTimezone(new Date().toISOString()));
-    if(!/^[0-9a-f-]{36}$/i.test(supplierId)||!validDate(date)||date!==dateInTimezone(new Date().toISOString()))return fail('Confirma o fornecedor e a data de hoje.');
+    const supplierId=String(body.supplierId||''),supplierName=String(body.supplierName||'').trim(),date=String(body.date||dateInTimezone(new Date().toISOString()));
+    if((!/^[0-9a-f-]{36}$/i.test(supplierId)&&(!supplierName||supplierName.length>120))||!validDate(date)||date!==dateInTimezone(new Date().toISOString()))return fail('Confirma o fornecedor e a data de hoje.');
     const day=new Date(`${date}T12:00:00Z`),weekday=((day.getUTCDay()+6)%7)+1;
-    const {data:supplier,error:supplierError}=await db.from('suppliers').select('id').eq('id',supplierId).eq('active',true).eq('order_weekday',weekday).maybeSingle();
+    let supplierQuery=db.from('suppliers').select('id').eq('active',true).eq('order_weekday',weekday);
+    supplierQuery=/^[0-9a-f-]{36}$/i.test(supplierId)?supplierQuery.eq('id',supplierId):supplierQuery.eq('name',supplierName);
+    const {data:supplier,error:supplierError}=await supplierQuery.maybeSingle();
     if(supplierError||!supplier)return fail('Este fornecedor não tem encomenda prevista para hoje.',403);
-    const {error}=await db.from('supplier_order_checks').insert({supplier_id:supplierId,order_date:date,completed_by:actor.id,completed_at:new Date().toISOString()});
+    const {error}=await db.from('supplier_order_checks').insert({supplier_id:supplier.id,order_date:date,completed_by:actor.id,completed_at:new Date().toISOString()});
     if(error)return fail(error.code==='23505'?'Esta encomenda já foi carimbada hoje.':'Não foi possível carimbar a encomenda.',error.code==='23505'?409:400);
     return reply({ok:true});
   }
