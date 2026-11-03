@@ -163,7 +163,7 @@ Deno.serve(async (req: Request) => {
     if (employmentError || insuranceError) return fail('Não foi possível carregar os dados do perfil.',500);
     return reply({employmentStartDate:employment?.start_date||null,insurance:insurance?{providerName:insurance.provider_name,policyNumber:insurance.policy_number}:null});
   }
-  const staffActions=new Set(['stock:list','stock:quantity','stock:minimum','stock:rename','stock:price','stock:create','inventory:monthly:get','inventory:monthly:start','inventory:monthly:save','pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','operations:daily:get','operations:daily:check','dashboard:daily-progress']);
+  const staffActions=new Set(['stock:list','stock:quantity','stock:minimum','stock:rename','stock:price','stock:create','inventory:monthly:get','inventory:monthly:start','inventory:monthly:save','pin:change','account:details','schedule:save','schedule:publish','suppliers:list','supplier-orders:list','supplier-orders:mark','supplier-deliveries:mark','attendance:list','attendance:record','attendance:cancel','schedule:list','closures:list','haccp:list','haccp:training-status','haccp:training-acknowledge','haccp:temperature','haccp:checklist','cleaning:record','facility-cleaning:list','facility-cleaning:record','onboarding:status','onboarding:acknowledge','onboarding:menu','onboarding:modules:list','onboarding:learning-progress','onboarding:learning-acknowledge','recipes:list','recipes:propose','recipes:save','supplier-order-sheets:list','supplier-order-sheets:save','operations:daily:get','operations:daily:check','dashboard:attendance-status','dashboard:daily-progress']);
   if(actor.role==='staff'&&!staffActions.has(action)&&!action.startsWith('invoice:'))return fail('Este módulo está disponível apenas à Gerência.',403);
 
   const invoiceActions=new Set(['invoice:list','invoice:upload-start','invoice:upload-finish','invoice:download','invoice:delete','invoice:bundle-links']);
@@ -254,6 +254,22 @@ Deno.serve(async (req: Request) => {
     if(new Date(`${date}T12:00:00Z`).getUTCDay()===0)return fail('O estabelecimento está encerrado ao domingo.');
     const {error}=await db.from('daily_operation_checks').upsert({check_date:date,task_key:taskKey,checked_by:actor.id},{onConflict:'check_date,task_key',ignoreDuplicates:true});
     return error?fail('Não foi possível guardar a verificação.',500):reply({ok:true,date});
+  }
+  if(action==='dashboard:attendance-status'){
+    if(!canManage(actor)&&actor.id!==RAFAEL_PROFILE_ID)return fail('Este resumo está disponível apenas à Gerência e ao Rafael Bessa.',403);
+    const date=operationalDate(),weekday=((new Date(`${date}T12:00:00Z`).getUTCDay()+6)%7)+1;
+    if(weekday===7)return reply({date,attendanceStatus:{completed:0,total:0,people:[]}});
+    const week=mondayOf(date),{data:schedule,error:scheduleError}=await db.from('weekly_schedules').select('id').eq('week_start',week).eq('status','published').order('version',{ascending:false}).limit(1).maybeSingle();
+    if(scheduleError)return fail('Não foi possível carregar o horário publicado.',500);
+    const {data:expectedShifts,error:shiftError}=schedule?await db.from('shifts').select('id,staff_id').eq('schedule_id',schedule.id).eq('shift_date',date).neq('staff_id',RAFAEL_PROFILE_ID):{data:[],error:null};
+    if(shiftError)return fail('Não foi possível carregar os turnos de hoje.',500);
+    const shifts=expectedShifts||[],shiftIds=shifts.map(shift=>shift.id),{data:attendanceRows,error:attendanceError}=shiftIds.length?await db.from('attendance_records').select('shift_id,kind,status').in('shift_id',shiftIds):{data:[],error:null};
+    if(attendanceError)return fail('Não foi possível calcular a assiduidade da equipa.',500);
+    const byShift=new Map<string,string[]>();for(const row of attendanceRows||[]){if(['cancelled','rejected'].includes(String(row.status||'')))continue;const kinds=byShift.get(row.shift_id)||[];kinds.push(row.kind);byShift.set(row.shift_id,kinds);}
+    const staffIds=[...new Set(shifts.map(shift=>shift.staff_id))],{data:profiles,error:profilesError}=staffIds.length?await db.from('profiles').select('id,display_name').in('id',staffIds).eq('active',true).eq('role','staff').neq('id',RAFAEL_PROFILE_ID):{data:[],error:null};
+    if(profilesError)return fail('Não foi possível associar os registos às colaboradoras.',500);
+    const people=(profiles||[]).map(profile=>{const personShifts=shifts.filter(shift=>shift.staff_id===profile.id);let completed=0,missingEntries=0,missingExits=0,hasEntry=false,hasExit=false,hasOccurrence=false,registered=false;for(const shift of personShifts){const kinds=byShift.get(shift.id)||[],incident=kinds.some(kind=>['absence','medical_leave','vacation'].includes(kind)),cin=kinds.includes('clock_in'),cout=kinds.includes('clock_out');if(incident){completed++;hasOccurrence=true;registered=true;}else{hasEntry ||=cin;hasExit ||=cout;if(cin||cout)registered=true;if(!cin)missingEntries++;if(!cout)missingExits++;if(cin&&cout)completed++;}}return{profile_id:profile.id,display_name:profile.display_name,completed_shifts:completed,total_shifts:personShifts.length,missing_entries:missingEntries,missing_exits:missingExits,has_entry:hasEntry,has_exit:hasExit,has_occurrence:hasOccurrence,registered,complete:personShifts.length>0&&completed===personShifts.length};}).sort((a,b)=>a.display_name.localeCompare(b.display_name,'pt-PT'));
+    return reply({date,attendanceStatus:{completed:people.filter(person=>person.complete).length,total:people.length,people}});
   }
   if(action==='dashboard:daily-progress'){
     if(!canManage(actor)&&actor.id!==RAFAEL_PROFILE_ID)return fail('Este resumo está disponível apenas à Gerência e ao Rafael Bessa.',403);
