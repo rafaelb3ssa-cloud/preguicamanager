@@ -731,8 +731,8 @@ Deno.serve(async (req: Request) => {
       schedule=published?.[0]||null;
     }
     // A schedule manager sees an in-progress draft first; everyone else sees only the latest published version.
-    let profileQuery=db.from('profiles').select('id,display_name,weekly_hours').eq('active',true).eq('role','staff').eq('schedule_access',true).order('display_name');
-    let shiftQuery=schedule?db.from('shifts').select('id,staff_id,shift_date,starts_at,ends_at,break_minutes,notes').eq('schedule_id',schedule.id).order('shift_date').order('starts_at'):null;
+    let profileQuery=db.from('profiles').select('id,display_name,weekly_hours').eq('active',true).eq('role','staff').eq('schedule_access',true).neq('id',RAFAEL_PROFILE_ID).order('display_name');
+    let shiftQuery=schedule?db.from('shifts').select('id,staff_id,shift_date,starts_at,ends_at,break_minutes,notes').eq('schedule_id',schedule.id).neq('staff_id',RAFAEL_PROFILE_ID).order('shift_date').order('starts_at'):null;
     const [profiles,shifts]=await Promise.all([profileQuery,shiftQuery||Promise.resolve({data:[],error:null})]);
     const {data:allSchedules,error:allError}=await db.from('weekly_schedules').select('id,week_start,version,accumulated_hours').eq('status','published').lte('week_start',week).order('week_start',{ascending:true}).order('version',{ascending:false});
     if(allError)return fail('Não foi possível calcular as horas acumuladas.',500);
@@ -782,7 +782,7 @@ Deno.serve(async (req: Request) => {
       }
     }
     const clean=[]; for(const s of items){if(!validDate(String(s.date||''))||String(s.date)<week||String(s.date)>=new Date(Date.parse(week+'T00:00:00Z')+7*86400000).toISOString().slice(0,10)||new Date(`${String(s.date)}T12:00:00Z`).getUTCDay()===0||!/^([01]\d|2[0-3]):(?:00|30)$/.test(String(s.start||''))||!/^([01]\d|2[0-3]):(?:00|30)$/.test(String(s.end||''))||String(s.start)===String(s.end)||!/^[0-9a-f-]{36}$/i.test(String(s.staffId||'')))return fail('Há um turno inválido. Escolhe horas em intervalos de 30 minutos, início e fim diferentes; ao domingo a equipa está de folga.');clean.push({schedule_id:schedule.id,staff_id:s.staffId,shift_date:s.date,starts_at:s.start,ends_at:s.end,break_minutes:Math.max(0,Number(s.breakMinutes)||0),notes:String(s.notes||'').slice(0,300)});}
-    const staffIds=[...new Set(clean.map(x=>x.staff_id))]; if(staffIds.length){const {data:validStaff,error:staffError}=await db.from('profiles').select('id').in('id',staffIds).eq('active',true).eq('role','staff').eq('schedule_access',true);if(staffError||validStaff?.length!==staffIds.length)return fail('O horário pode incluir apenas colaboradoras ativas.',403)}
+    const staffIds=[...new Set(clean.map(x=>x.staff_id))]; if(staffIds.length){const {data:validStaff,error:staffError}=await db.from('profiles').select('id').in('id',staffIds).eq('active',true).eq('role','staff').eq('schedule_access',true).neq('id',RAFAEL_PROFILE_ID);if(staffError||validStaff?.length!==staffIds.length)return fail('O horário pode incluir apenas colaboradoras ativas.',403)}
     await db.from('shifts').delete().eq('schedule_id',schedule.id); if(clean.length){const {error}=await db.from('shifts').insert(clean);if(error)return fail('Não foi possível guardar os turnos.',400)} return reply({ok:true,scheduleId:schedule.id});
   }
   if (action === 'schedule:publish') {
