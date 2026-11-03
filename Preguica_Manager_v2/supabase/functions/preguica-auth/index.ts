@@ -255,6 +255,28 @@ Deno.serve(async (req: Request) => {
     const {error}=await db.from('daily_operation_checks').upsert({check_date:date,task_key:taskKey,checked_by:actor.id},{onConflict:'check_date,task_key',ignoreDuplicates:true});
     return error?fail('Não foi possível guardar a verificação.',500):reply({ok:true,date});
   }
+  const accountantTaskKeys=new Set(['saft','bank_statements_and_invoices','invoices','vat_map','sold_items','daily_billing_history','email_replies']);
+  if(action==='accountant:monthly:list'){
+    if(!canManage(actor))return fail('A lista da contabilista está disponível apenas à Gerência.',403);
+    const currentMonth=lisbonToday().slice(0,7),firstMonth='2026-11',firstDate=firstMonth+'-01',currentDate=currentMonth+'-01';
+    const {data:checks,error}=await db.from('monthly_accountant_checks').select('month_start,task_key,checked_by,checked_at').gte('month_start',firstDate).lte('month_start',currentDate);
+    if(error)return fail('Não foi possível carregar a lista mensal da contabilista.',500);
+    const rows=checks||[],profileIds=[...new Set(rows.map(row=>row.checked_by))],{data:profiles, error:profileError}=profileIds.length?await db.from('profiles').select('id,display_name').in('id',profileIds):{data:[],error:null};
+    if(profileError)return fail('Não foi possível identificar quem assinalou as tarefas.',500);
+    const names=new Map((profiles||[]).map(profile=>[profile.id,profile.display_name])),byMonth=new Map<string,Record<string,unknown>>();
+    for(const row of rows){const month=String(row.month_start).slice(0,7),items=byMonth.get(month)||{};items[row.task_key]={checked_by_name:names.get(row.checked_by)||'Gerência',checked_at:row.checked_at};byMonth.set(month,items);}
+    const months:any[]=[];for(let cursor=new Date(firstDate+'T00:00:00Z'),end=new Date(currentDate+'T00:00:00Z');cursor<=end;cursor.setUTCMonth(cursor.getUTCMonth()+1)){const month=cursor.toISOString().slice(0,7),checked=byMonth.get(month)||{},completed=accountantTaskKeys.size?Array.from(accountantTaskKeys).filter(key=>!!checked[key]).length:0;months.push({month,checked,completed,total:accountantTaskKeys.size,overdue:month<currentMonth&&completed<accountantTaskKeys.size});}
+    return reply({currentMonth,months});
+  }
+  if(action==='accountant:monthly:check'){
+    if(!canManage(actor))return fail('A lista da contabilista está disponível apenas à Gerência.',403);
+    const month=String(body.month||''),taskKey=String(body.taskKey||''),currentMonth=lisbonToday().slice(0,7);
+    if(!/^\\d{4}-(0[1-9]|1[0-2])$/.test(month)||month<'2026-11'||month>currentMonth||!accountantTaskKeys.has(taskKey))return fail('Confirma o mês e a tarefa selecionados.');
+    const monthStart=month+'-01';
+    if(body.checked===false){const {error}=await db.from('monthly_accountant_checks').delete().eq('month_start',monthStart).eq('task_key',taskKey);return error?fail('Não foi possível retirar o visto.',500):reply({ok:true,month,taskKey,checked:false});}
+    const {error}=await db.from('monthly_accountant_checks').upsert({month_start:monthStart,task_key:taskKey,checked_by:actor.id,checked_at:new Date().toISOString()},{onConflict:'month_start,task_key'});
+    return error?fail('Não foi possível guardar o visto.',500):reply({ok:true,month,taskKey,checked:true});
+  }
   if(action==='dashboard:attendance-status'){
     if(!canManage(actor)&&actor.id!==RAFAEL_PROFILE_ID)return fail('Este resumo está disponível apenas à Gerência e ao Rafael Bessa.',403);
     const date=operationalDate(),weekday=((new Date(`${date}T12:00:00Z`).getUTCDay()+6)%7)+1;
